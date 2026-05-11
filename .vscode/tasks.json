@@ -1,0 +1,133 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "run-test-py",
+			"type": "shell",
+			"command": "python3",
+			"args": [
+				"test.py"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "install-scipy",
+			"type": "shell",
+			"command": "python3",
+			"args": [
+				"-m",
+				"pip",
+				"install",
+				"scipy"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "install-scipy-verify",
+			"type": "shell",
+			"command": "python3",
+			"args": [
+				"-m",
+				"pip",
+				"install",
+				"scipy",
+				"--no-cache-dir"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "check-scipy-import",
+			"type": "shell",
+			"command": "python3",
+			"args": [
+				"-c",
+				"import scipy; print(scipy.__version__)"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "install-scipy-clean",
+			"type": "shell",
+			"command": "python3",
+			"args": [
+				"-m",
+				"pip",
+				"install",
+				"scipy",
+				"--no-cache-dir",
+				"--progress-bar",
+				"off"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "install-scipy-log",
+			"type": "shell",
+			"command": "bash",
+			"args": [
+				"-lc",
+				"python3 -m pip install scipy --no-cache-dir --progress-bar off 2>&1 | tee /tmp/install_scipy.log; echo EXIT:$?"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "pip-freeze-scipy",
+			"type": "shell",
+			"command": "python3",
+			"args": [
+				"-m",
+				"pip",
+				"freeze"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "Install SciPy",
+			"type": "shell",
+			"command": "python3 -m pip install scipy",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Run test.py",
+			"type": "shell",
+			"command": "python3 test.py",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Run test file",
+			"type": "shell",
+			"command": "python3 test.py",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Run test file 2",
+			"type": "shell",
+			"command": "python3 test.py",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Run test file headless",
+			"type": "shell",
+			"command": "MPLBACKEND=Agg python3 test.py",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Run test file headless 2",
+			"type": "shell",
+			"command": "MPLBACKEND=Agg python3 test.py",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": []
+		}
+	]
+}

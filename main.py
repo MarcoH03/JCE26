@@ -3,10 +3,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 import scipy.sparse as sp
 
-
-A,B,size = t.matrix_A_B_generator_single_ring(1000)
+N_R = 10 #number of points per branch of the ring
 N_l = 10
-time_steps = 100
+
+A,B,size = t.matrix_A_B_generator_single_ring(N_R)
+time_steps = 1000000
+
 
 psi_array = np.empty(time_steps+1, dtype=object)
 
