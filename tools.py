@@ -11,15 +11,19 @@ L_ring = np.pi*R #length of the branch of the ring in nm
 N_l = 10 #number of points per lead:
 N_R = 10 #number of points per branch of the ring
 
-Phi = 1 / 2 # Aharonov-Bohm Phase
-phi_link = Phi / 2*(N_R-1) #fase de AB agregada en cada paso espacial
-phi_U = phi_link  #la fase acumulada en upper ring se suma
-phi_D = -phi_link #la fase acumulada en lower(down) ring se resta
-phi_L = phi_R = 0 #la fase acumulada en los leads left y right son 0 
-
 delta_x = L_leads/(N_l-1) #space step for the leads
 delta_s = L_ring/(N_R-1) #space step for the ring
 dt = 1 #time step
+
+Phi = 1 / 2 # Aharonov-Bohm Phase
+phi_link = Phi / 2*(N_R-1) #fase de AB agregada en cada paso espacial
+phi_U = phi_link  #la fase AB acumulada en upper ring se suma
+phi_D = -phi_link #la fase AB acumulada en lower(down) ring se resta
+phi_L = phi_R = 0 #la fase AB acumulada en los leads left y right son 0 
+
+Phi_so = 0.1 #Spin-Orbit phase
+alpha = 20    # Rashba Parameter in meV.nm
+phi_so_link = theta_R = m * alpha * delta_s / h_bar**2
 
 lambda_lead = 1j*h_bar*dt/(2*m*delta_x**2)
 lambda_ring = 1j*h_bar/(2*m*delta_s**2)
@@ -89,22 +93,34 @@ def matrix_A_B_generator_single_ring(N_R):     #N_R is the numberof points per r
     #fill the dictionary
     #column of the left lead
     for i in range(N_l):
-        idx[f"L{i}"] = counter
+        idx[f"L{i}_up"] = counter
+        counter+= 1
+        
+        idx[f"L{i}_down"] = counter
         counter+= 1
     
     #columns of ring upper arm
     for i in range(N_R):
-        idx[f"U{i}"] = counter
+        idx[f"U{i}_up"] = counter
+        counter+= 1
+        
+        idx[f"U{i}_down"] = counter
         counter+= 1
 
     #column of the ring lower arm
     for i in range(N_R):
-        idx[f"D{i}"] = counter
+        idx[f"D{i}_up"] = counter
+        counter+= 1 
+        
+        idx[f"D{i}_down"] = counter
         counter+= 1
 
     #column of the right lead
     for i in range(N_l):
-        idx[f"R{i}"] = counter
+        idx[f"R{i}_up"] = counter
+        counter+= 1
+
+        idx[f"R{i}_down"] = counter
         counter+= 1
 
     size = counter 
@@ -119,119 +135,309 @@ def matrix_A_B_generator_single_ring(N_R):     #N_R is the numberof points per r
     #initialize matrix A and B
     A = np.zeros((size,size), dtype=complex)
     B = np.zeros((size,size), dtype=complex)
+    
+    #Matriz que determina la rotacion de spin en cada enlace debido al efecto Rashba 
+    def U_rashba(theta):
+        return np.array([
+            [np.cos(theta), -np.sin(theta)],
+            [np.sin(theta),  np.cos(theta)]
+        ], dtype=complex)
 
-    row = 0
+    row_up = 0
+    row_down = row_up + 1
 
     #Fill the matrixs
     #Left leads
     for i in range(1,N_l - 1):
-        A[row, idx[f"L{i-1}"]] = a(lambda_lead, phi_L)
-        A[row, idx[f"L{i}"]] = b(lambda_lead, "L", i)
-        A[row, idx[f"L{i+1}"]] = c(lambda_lead, phi_L)
+        #Spin Up
+        phi_total = phi_L
+        A[row_up, idx[f"L{i-1}_up"]] += a(lambda_lead, phi_total)*U_rashba(phi_so_link)[0,0]
+        A[row_up, idx[f"L{i-1}_down"]] += a(lambda_lead, phi_total)*U_rashba(phi_so_link)[0,1]
+        
+        A[row_up, idx[f"L{i}_up"]] += b(lambda_lead, "L", i)
+        
+        A[row_up, idx[f"L{i+1}_up"]] += c(lambda_lead, phi_total)*U_rashba(phi_so_link)[0,0]
+        A[row_up, idx[f"L{i+1}_down"]] += c(lambda_lead, phi_total)*U_rashba(phi_so_link)[0,1]
 
-        B[row, idx[f"L{i-1}"]] = -a(lambda_lead, phi_L)
-        B[row, idx[f"L{i}"]] = b_b(lambda_lead, "L", i)
-        B[row, idx[f"L{i+1}"]] = -c(lambda_lead, phi_L)
 
-        row+=1
+        B[row_up, idx[f"L{i-1}_up"]] = -a(lambda_lead, phi_total)*U_rashba(phi_so_link)[0,0]
+        B[row_up, idx[f"L{i-1}_down"]] = -a(lambda_lead, phi_total)*U_rashba(phi_so_link)[0,1]
+        
+        B[row_up, idx[f"L{i}_up"]] = b_b(lambda_lead, "L", i)
+        
+        B[row_up, idx[f"L{i+1}_up"]] = -c(lambda_lead, phi_total)*U_rashba(phi_so_link)[0,0]
+        B[row_up, idx[f"L{i+1}_down"]] = -c(lambda_lead, phi_total)*U_rashba(phi_so_link)[0,1]
+        
+        
+        #Spin Down
+        phi_total = phi_L - phi_so_link #la fase total incluyendo AB y AC
+        A[row_down, idx[f"L{i-1}_down"]] = a(lambda_lead, phi_total)*U_rashba(phi_so_link)[1,1]
+        A[row_down, idx[f"L{i-1}_up"]] = a(lambda_lead, phi_total)*U_rashba(phi_so_link)[1,0]
+        
+        A[row_down, idx[f"L{i}_down"]] = b(lambda_lead, "L", i)
+        
+        A[row_down, idx[f"L{i+1}_down"]] = c(lambda_lead, phi_total)*U_rashba(phi_so_link)[1,1]
+        A[row_down, idx[f"L{i+1}_up"]] = c(lambda_lead, phi_total)*U_rashba(phi_so_link)[1,0]
+
+        B[row_down, idx[f"L{i-1}_down"]] = -a(lambda_lead, phi_total)*U_rashba(phi_so_link)[1,1]
+        B[row_down, idx[f"L{i-1}_up"]] = -a(lambda_lead, phi_total)*U_rashba(phi_so_link)[1,0]
+        
+        B[row_down, idx[f"L{i}_down"]] = b_b(lambda_lead, "L", i)
+        
+        B[row_down, idx[f"L{i+1}_down"]] = -c(lambda_lead, phi_total)*U_rashba(phi_so_link)[1,1]
+        B[row_down, idx[f"L{i+1}_up"]] = -c(lambda_lead, phi_total)*U_rashba(phi_so_link)[1,0]
+
+        row_up+=2
+        row_down = row_up + 1
 
     #Junction equations
     # L0=U0
-    A[row, idx["L0"]] = B[row, idx["L0"]] = 1
-    A[row, idx["U0"]] = B[row, idx["U0"]] = -1
-
-    row += 1
+    #Spin Up
+    A[row_up, idx["L0_up"]] = B[row_up, idx["L0_up"]] = 1
+    A[row_up, idx["U0_up"]] = B[row_up, idx["U0_up"]] = -1
     
-    # L0=D0
-    A[row, idx["L0"]] = B[row, idx["L0"]] = 1
-    A[row, idx["D0"]] = B[row, idx["D0"]] = -1
+    #Spin Down
+    A[row_down, idx["L0_down"]] = B[row_down, idx["L0_down"]] = 1
+    A[row_down, idx["U0_down"]] = B[row_down, idx["U0_down"]] = -1
+    
+    row_up += 2
+    row_down = row_up + 1
 
-    row += 1
+    # L0=D0
+    #Spin Up
+    A[row_up, idx["L0_up"]] = B[row_up, idx["L0_up"]] = 1
+    A[row_up, idx["D0_up"]] = B[row_up, idx["D0_up"]] = -1
+    
+    #Spin Down
+    A[row_down, idx["L0_down"]] = B[row_down, idx["L0_down"]] = 1
+    A[row_down, idx["D0_down"]] = B[row_down, idx["D0_down"]] = -1
+    
+    row_up += 2
+    row_down = row_up + 1
+
 
     #Current conservation
     # -(L1 - L0) + (U1 - U0) + (D1 - D0) = 0
-    A[row, idx["L1"]] = B[row, idx["L1"]] = -1
-    A[row, idx["L0"]] = B[row, idx["L0"]] = 1
+    #Spin Up
+    A[row_up, idx["L1_up"]] = B[row_up, idx["L1_up"]] = -1
+    A[row_up, idx["L0_up"]] = B[row_up, idx["L0_up"]] = 1
 
-    A[row, idx["U1"]] = B[row, idx["U1"]] = 1
-    A[row, idx["U0"]] = B[row, idx["U0"]] = -1
+    A[row_up, idx["U1_up"]] = B[row_up, idx["U1_up"]] = 1
+    A[row_up, idx["U0_up"]] = B[row_up, idx["U0_up"]] = -1
+    
+    A[row_up, idx["D1_up"]] = B[row_up, idx["D1_up"]] = 1
+    A[row_up, idx["D0_up"]] = B[row_up, idx["D0_up"]] = -1
+    
+    #Spin Down
+    A[row_down, idx["L1_down"]] = B[row_down, idx["L1_down"]] = -1
+    A[row_down, idx["L0_down"]] = B[row_down, idx["L0_down"]] = 1
 
-    A[row, idx["D1"]] = B[row, idx["D1"]] = 1
-    A[row, idx["D0"]] = B[row, idx["D0"]] = -1
-
-    row += 1
+    A[row_down, idx["U1_down"]] = B[row_down, idx["U1_down"]] = 1
+    A[row_down, idx["U0_down"]] = B[row_down, idx["U0_down"]] = -1
+    
+    A[row_down, idx["D1_down"]] = B[row_down, idx["D1_down"]] = 1
+    A[row_down, idx["D0_down"]] = B[row_down, idx["D0_down"]] = -1
+    
+    row_up += 2
+    row_down = row_up + 1
 
     #Upper arm ring
     for i in range(1,N_R - 1):
-        A[row, idx[f"U{i-1}"]] = a(lambda_ring, phi_U)
-        A[row, idx[f"U{i}"]] = b(lambda_ring, "U", i)
-        A[row, idx[f"U{i+1}"]] = c(lambda_ring, phi_U)
+        #Spin Up
+        phi_total = phi_U #la fase AB
+        A[row_up, idx[f"U{i-1}_up"]] = a(lambda_ring, phi_total)*U_rashba(phi_so_link)[0,0]
+        A[row_up, idx[f"U{i-1}_down"]] = a(lambda_ring, phi_total)*U_rashba(phi_so_link)[0,1]
+        
+        A[row_up, idx[f"U{i}_up"]] = b(lambda_ring, "U", i)
+        
+        A[row_up, idx[f"U{i+1}_up"]] = c(lambda_ring, phi_total)*U_rashba(phi_so_link)[0,0]
+        A[row_up, idx[f"U{i+1}_down"]] = c(lambda_ring, phi_total)*U_rashba(phi_so_link)[0,1]
 
-        B[row, idx[f"U{i-1}"]] = -a(lambda_ring, phi_U)
-        B[row, idx[f"U{i}"]] = b_b(lambda_ring, "U", i)
-        B[row, idx[f"U{i+1}"]] = -c(lambda_ring, phi_U)
+        B[row_up, idx[f"U{i-1}_up"]] = -a(lambda_ring, phi_total)*U_rashba(phi_so_link)[0,0]
+        B[row_up, idx[f"U{i-1}_down"]] = -a(lambda_ring, phi_total)*U_rashba(phi_so_link)[0,1]
+        
+        B[row_up, idx[f"U{i}_up"]] = b_b(lambda_ring, "U", i)
+        
+        B[row_up, idx[f"U{i+1}_up"]] = -c(lambda_ring, phi_total)*U_rashba(phi_so_link)[0,0]
+        B[row_up, idx[f"U{i+1}_down"]] = -c(lambda_ring, phi_total)*U_rashba(phi_so_link)[0,1]
+        
+        #Spin Down
+        phi_total = phi_U - phi_so_link #la fase total incluyendo AB y AC
+        A[row_down, idx[f"U{i-1}_down"]] = a(lambda_ring, phi_total)*U_rashba(phi_so_link)[1,1]
+        A[row_down, idx[f"U{i-1}_up"]] = a(lambda_ring, phi_total)*U_rashba(phi_so_link)[1,0]
+        
+        A[row_down, idx[f"U{i}_down"]] = b(lambda_ring, "U", i)
+        
+        A[row_down, idx[f"U{i+1}_down"]] = c(lambda_ring, phi_total)*U_rashba(phi_so_link)[1,1]
+        A[row_down, idx[f"U{i+1}_up"]] = c(lambda_ring, phi_total)*U_rashba(phi_so_link)[1,0]
 
-        row+=1
+        B[row_down, idx[f"U{i-1}_down"]] = -a(lambda_ring, phi_total)*U_rashba(phi_so_link)[1,1]
+        B[row_down, idx[f"U{i-1}_up"]] = -a(lambda_ring, phi_total)*U_rashba(phi_so_link)[1,0]
+        
+        B[row_down, idx[f"U{i}_down"]] = b_b(lambda_ring, "U", i)
+        
+        B[row_down, idx[f"U{i+1}_down"]] = -c(lambda_ring, phi_total)*U_rashba(phi_so_link)[1,1]
+        B[row_down, idx[f"U{i+1}_up"]] = -c(lambda_ring, phi_total)*U_rashba(phi_so_link)[1,0]
+        row_up += 2
+        row_down = row_up + 1
     
     #Lower arm ring
     for i in range(1,N_R - 1):
-        A[row, idx[f"D{i-1}"]] = a(lambda_ring, phi_D)
-        A[row, idx[f"D{i}"]] = b(lambda_ring, "D", i)
-        A[row, idx[f"D{i+1}"]] = c(lambda_ring, phi_D)
+        #Spin Up
+        phi_total = phi_D  #la fase AB
+        A[row_up, idx[f"D{i-1}_up"]] = a(lambda_ring, phi_total)*U_rashba(phi_so_link)[0,0]
+        A[row_up, idx[f"D{i-1}_down"]] = a(lambda_ring, phi_total)*U_rashba(phi_so_link)[0,1]
+        
+        A[row_up, idx[f"D{i}_up"]] = b(lambda_ring, "D", i)
+        
+        A[row_up, idx[f"D{i+1}_up"]] = c(lambda_ring, phi_total)*U_rashba(phi_so_link)[0,0]
+        A[row_up, idx[f"D{i+1}_down"]] = c(lambda_ring, phi_total)*U_rashba(phi_so_link)[0,1]
 
-        B[row, idx[f"D{i-1}"]] = -a(lambda_ring, phi_D)
-        B[row, idx[f"D{i}"]] = b_b(lambda_ring, "D", i)
-        B[row, idx[f"D{i+1}"]] = -c(lambda_ring, phi_D)
+        B[row_up, idx[f"D{i-1}_up"]] = -a(lambda_ring, phi_total)*U_rashba(phi_so_link)[0,0]
+        B[row_up, idx[f"D{i-1}_down"]] = -a(lambda_ring, phi_total)*U_rashba(phi_so_link)[0,1]
+        
+        B[row_up, idx[f"D{i}_up"]] = b_b(lambda_ring, "D", i)
+        
+        B[row_up, idx[f"D{i+1}_up"]] = -c(lambda_ring, phi_total)*U_rashba(phi_so_link)[0,0]
+        B[row_up, idx[f"D{i+1}_down"]] = -c(lambda_ring, phi_total)*U_rashba(phi_so_link)[0,1]
+        
+        #Spin Down
+        phi_total = phi_D #la fase AB
+        A[row_down, idx[f"D{i-1}_down"]] = a(lambda_ring, phi_total)*U_rashba(phi_so_link)[1,1]
+        A[row_down, idx[f"D{i-1}_up"]] = a(lambda_ring, phi_total)*U_rashba(phi_so_link)[1,0]
+        
+        A[row_down, idx[f"D{i}_down"]] = b(lambda_ring, "D", i)
+        
+        A[row_down, idx[f"D{i+1}_down"]] = c(lambda_ring, phi_total)*U_rashba(phi_so_link)[1,1]
+        A[row_down, idx[f"D{i+1}_up"]] = c(lambda_ring, phi_total)*U_rashba(phi_so_link)[1,0]
 
-        row+=1
+        B[row_down, idx[f"D{i-1}_down"]] = -a(lambda_ring, phi_total)*U_rashba(phi_so_link)[1,1]
+        B[row_down, idx[f"D{i-1}_up"]] = -a(lambda_ring, phi_total)*U_rashba(phi_so_link)[1,0]
+        
+        B[row_down, idx[f"D{i}_down"]] = b_b(lambda_ring, "D", i)
+        
+        B[row_down, idx[f"D{i+1}_down"]] = -c(lambda_ring, phi_total)*U_rashba(phi_so_link)[1,1]
+        B[row_down, idx[f"D{i+1}_up"]] = -c(lambda_ring, phi_total)*U_rashba(phi_so_link)[1,0]
+        
+        row_up += 2
+        row_down = row_up + 1
     
     #Dirichlet boundary condition at the end of the upper arm
-    A[row, idx[f"L{N_l-1}"]] = 1
-    B[row, idx[f"L{N_l-1}"]] = 1
-    row += 1
+    #Spin Up
+    A[row_up, idx[f"L{N_l-1}_up"]] = 1
+    B[row_up, idx[f"L{N_l-1}_up"]] = 1
+    row_up += 2
+    
+    #Spin Down
+    A[row_down, idx[f"L{N_l-1}_down"]] = 1
+    B[row_down, idx[f"L{N_l-1}_down"]] = 1
+    row_down += 2
+
 
     #junction B equations 
     # R0=U4
-    A[row, idx["R0"]] = B[row, idx["R0"]] = 1
-    A[row, idx[f"U{N_R-1}"]] = B[row, idx[f"U{N_R-1}"]] = -1
+    #Spin Up
+    A[row_up, idx["R0_up"]] = B[row_up, idx["R0_up"]] = 1
+    A[row_up, idx[f"U{N_R-1}_up"]] = B[row_up, idx[f"U{N_R-1}_up"]] = -1
 
-    row += 1
+    row_up += 2
+    
+    #Spin Down
+    A[row_down, idx["R0_down"]] = B[row_down, idx["R0_down"]] = 1
+    A[row_down, idx[f"U{N_R-1}_down"]] = B[row_down, idx[f"U{N_R-1}_down"]] = -1
+    row_down += 2
 
     # R0=D4
-    A[row, idx["R0"]] = B[row, idx["R0"]] = 1
-    A[row, idx[f"D{N_R-1}"]] = B[row, idx[f"D{N_R-1}"]] = -1
+    #Spin Up
+    A[row_up, idx["R0_up"]] = B[row_up, idx["R0_up"]] = 1
+    A[row_up, idx[f"D{N_R-1}_up"]] = B[row_up, idx[f"D{N_R-1}_up"]] = -1
 
-    row += 1
+    row_up += 2
+    
+    #Spin Down
+    A[row_down, idx["R0_down"]] = B[row_down, idx["R0_down"]] = 1
+    A[row_down, idx[f"D{N_R-1}_down"]] = B[row_down, idx[f"D{N_R-1}_down"]] = -1
+
+    row_down += 2
 
     #Current conservation
     # −(Ulast​−Uprev​)−(Dlast​−Dprev​)+(R1​−R0​)=0
-    A[row, idx[f"U{N_R-1}"]] = B[row, idx[f"U{N_R-1}"]] = -1
-    A[row, idx[f"U{N_R-2}"]] = B[row, idx[f"U{N_R-2}"]] = 1
+    #Spin Up
+    A[row_up, idx[f"U{N_R-1}_up"]] = B[row_up, idx[f"U{N_R-1}_up"]] = -1
+    A[row_up, idx[f"U{N_R-2}_up"]] = B[row_up, idx[f"U{N_R-2}_up"]] = 1
 
-    A[row, idx[f"D{N_R-1}"]] = B[row, idx[f"D{N_R-1}"]] = -1
-    A[row, idx[f"D{N_R-2}"]] = B[row, idx[f"D{N_R-2}"]] = 1
+    A[row_up, idx[f"D{N_R-1}_up"]] = B[row_up, idx[f"D{N_R-1}_up"]] = -1
+    A[row_up, idx[f"D{N_R-2}_up"]] = B[row_up, idx[f"D{N_R-2}_up"]] = 1
+    
+    A[row_up, idx["R1_up"]] = B[row_up, idx["R1_up"]] = 1
+    A[row_up, idx["R0_up"]] = B[row_up, idx["R0_up"]] = -1
 
-    A[row, idx["R1"]] = B[row, idx["R1"]] = 1
-    A[row, idx["R0"]] = B[row, idx["R0"]] = -1
+    row_up += 2
+    
+    #Spin Down
+    A[row_down, idx[f"U{N_R-1}_down"]] = B[row_down, idx[f"U{N_R-1}_down"]] = -1
+    A[row_down, idx[f"U{N_R-2}_down"]] = B[row_down, idx[f"U{N_R-2}_down"]] = 1
+    
+    A[row_down, idx[f"D{N_R-1}_down"]] = B[row_down, idx[f"D{N_R-1}_down"]] = -1
+    A[row_down, idx[f"D{N_R-2}_down"]] = B[row_down, idx[f"D{N_R-2}_down"]] = 1
 
-    row += 1
+    A[row_down, idx["R1_down"]] = B[row_down, idx["R1_down"]] = 1
+    A[row_down, idx["R0_down"]] = B[row_down, idx["R0_down"]] = -1
+
+    row_down += 2
 
     #Right lead
     for i in range(1,N_l - 1):
-        A[row, idx[f"R{i-1}"]] = a(lambda_lead, phi_R)
-        A[row, idx[f"R{i}"]] = b(lambda_lead, "R", i)
-        A[row, idx[f"R{i+1}"]] = c(lambda_lead, phi_R)
+        #Spin Up
+        phi_total = phi_R #la fase AB
+        A[row_up, idx[f"R{i-1}_up"]] = a(lambda_lead, phi_total)*U_rashba(phi_so_link)[0,0]
+        A[row_up, idx[f"R{i-1}_down"]] = a(lambda_lead, phi_total)*U_rashba(phi_so_link)[0,1]
+        
+        A[row_up, idx[f"R{i}_up"]] = b(lambda_lead, "R", i)
+        
+        A[row_up, idx[f"R{i+1}_up"]] = c(lambda_lead, phi_total)*U_rashba(phi_so_link)[0,0]
+        A[row_up, idx[f"R{i+1}_down"]] = c(lambda_lead, phi_total)*U_rashba(phi_so_link)[0,1]
 
-        B[row, idx[f"R{i-1}"]] = -a(lambda_lead, phi_R)
-        B[row, idx[f"R{i}"]] = b_b(lambda_lead, "R", i)
-        B[row, idx[f"R{i+1}"]] = -c(lambda_lead, phi_R)
+        B[row_up, idx[f"R{i-1}_up"]] = -a(lambda_lead, phi_total)*U_rashba(phi_so_link)[0,0]
+        B[row_up, idx[f"R{i-1}_down"]] = -a(lambda_lead, phi_total)*U_rashba(phi_so_link)[0,1]
+        
+        B[row_up, idx[f"R{i}_up"]] = b_b(lambda_lead, "R", i)
+        
+        B[row_up, idx[f"R{i+1}_up"]] = -c(lambda_lead, phi_total)*U_rashba(phi_so_link)[0,0]
+        B[row_up, idx[f"R{i+1}_down"]] = -c(lambda_lead, phi_total)*U_rashba(phi_so_link)[0,1]
 
-        row+=1
+        
+        #Spin Down
+        phi_total = phi_R - phi_so_link
+        A[row_down, idx[f"R{i-1}_down"]] = a(lambda_lead, phi_total)*U_rashba(phi_so_link)[1,1]
+        A[row_down, idx[f"R{i-1}_up"]] = a(lambda_lead, phi_total)*U_rashba(phi_so_link)[1,0]
+        
+        A[row_down, idx[f"R{i}_down"]] = b(lambda_lead, "R", i)
+        
+        A[row_down, idx[f"R{i+1}_down"]] = c(lambda_lead, phi_total)*U_rashba(phi_so_link)[1,1]
+        A[row_down, idx[f"R{i+1}_up"]] = c(lambda_lead, phi_total)*U_rashba(phi_so_link)[1,0]
+
+        B[row_down, idx[f"R{i-1}_down"]] = -a(lambda_lead, phi_total)*U_rashba(phi_so_link)[1,1]
+        B[row_down, idx[f"R{i-1}_up"]] = -a(lambda_lead, phi_total)*U_rashba(phi_so_link)[1,0]
+        
+        B[row_down, idx[f"R{i}_down"]] = b_b(lambda_lead, "R", i)
+        
+        B[row_down, idx[f"R{i+1}_down"]] = -c(lambda_lead, phi_total)*U_rashba(phi_so_link)[1,1]
+        B[row_down, idx[f"R{i+1}_up"]] = -c(lambda_lead, phi_total)*U_rashba(phi_so_link)[1,0]
+        
+        row_up += 2
+        row_down = row_up + 1
 
     #dirithclet boundary condition at the end of the right lead
-    A[row, idx[f"R{N_l-1}"]] = 1
-    B[row, idx[f"R{N_l-1}"]] = 1
-    row += 1
+    #Spin Up
+    A[row_up, idx[f"R{N_l-1}_up"]] = 1
+    B[row_up, idx[f"R{N_l-1}_up"]] = 1
+    row_up += 2
+    
+    #Spin Down
+    A[row_down, idx[f"R{N_l-1}_down"]] = 1
+    B[row_down, idx[f"R{N_l-1}_down"]] = 1
+    row_down += 2
 
     return A,B, size
 
