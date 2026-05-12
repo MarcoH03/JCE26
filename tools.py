@@ -1,19 +1,20 @@
 import numpy as np
 
 #Universal Constants:
-h_bar= 1
+h_bar = 0.658212  # meV*ps
+m_e = 5.68563e3  # meV*ps^2/nm^2
 
-m = 0.023  # InAs Effective Mass (dimensionless)
+m = 0.023 * m_e  # InAs Effective Mass (dimensionless)
 R = 250 #radious of the ring in nm
-L_leads = 50 #length of the leads in nm
+L_leads = 100 #length of the leads in nm
 L_ring = np.pi*R #length of the branch of the ring in nm
 
-N_l = 10 #number of points per lead:
-N_R = 10 #number of points per branch of the ring
+N_l = 20 #number of points per lead:
+N_R = 100 #number of points per branch of the ring
 
 delta_x = L_leads/(N_l-1) #space step for the leads
 delta_s = L_ring/(N_R-1) #space step for the ring
-dt = 1 #time step
+dt = 1  # ps
 
 Phi = 1 / 2 # Aharonov-Bohm Phase
 phi_link = Phi / 2*(N_R-1) #fase de AB agregada en cada paso espacial
@@ -83,7 +84,7 @@ def V(section, i):
     return 0
 
 #creates the matrix A and B for the system
-def matrix_A_B_generator_single_ring(N_R):     #N_R is the numberof points per ring
+def matrix_A_B_generator_single_ring(N_R, k):     #N_R is the numberof points per ring
 
     #dictionary that contains the columns assinged to each variable 
     idx = {}
@@ -428,15 +429,18 @@ def matrix_A_B_generator_single_ring(N_R):     #N_R is the numberof points per r
         row_up += 2
         row_down = row_up + 1
 
-    #dirithclet boundary condition at the end of the right lead
+    phase = np.exp(1j*k*delta_x)
+
     #Spin Up
     A[row_up, idx[f"R{N_l-1}_up"]] = 1
-    B[row_up, idx[f"R{N_l-1}_up"]] = 1
+    A[row_up, idx[f"R{N_l-2}_up"]] = -phase
+
     row_up += 2
-    
+
     #Spin Down
     A[row_down, idx[f"R{N_l-1}_down"]] = 1
-    B[row_down, idx[f"R{N_l-1}_down"]] = 1
+    A[row_down, idx[f"R{N_l-2}_down"]] = -phase
+
     row_down += 2
 
     return A,B, size
