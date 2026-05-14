@@ -13,13 +13,13 @@ theta = 12.5*np.pi
 
 #k= np.sqrt(2*t.m*Ef)/t.h_bar #wavevector of the initial wavefunction in the left lead
 k = theta/(2*np.pi*t.R)
-
+k=10
 
 theta = k * (2*np.pi*t.R)
 print(f"theta = {theta:.2f} rad")
 print(f"k = {k:.4f} nm^-1")
 
-time_steps = 1000
+time_steps = 10000
 
 #region Solve QR
 psi_up_array, psi_down_array = t.solve_QR(N_R, k, time_steps)
@@ -60,10 +60,10 @@ plt.show()
 
 #endregion plot_V
 
-for i in range(100):
-    k = i/100 + 100
-    psi_k_up_array, psi_k_down_array = t.solve_QR(N_R, k, time_steps)
-    t.plot_animate_psi_total(psi_k_up_array, psi_k_down_array, (2*N_l+2*N_R), k)
+# for i in range(100):
+#     k = i/100 + 100
+#     psi_k_up_array, psi_k_down_array = t.solve_QR(N_R, k, time_steps)
+#     t.plot_animate_psi_total(psi_k_up_array, psi_k_down_array, (2*N_l+2*N_R), k)
     
 
     

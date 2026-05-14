@@ -14,15 +14,15 @@ R = 250 #radious of the ring in nm
 L_leads = 100 #length of the leads in nm
 L_ring = np.pi*R #length of the branch of the ring in nm
 
-N_l = 5 #number of points per lead:
-N_R = 5 #number of points per branch of the ring
+N_l = 50 #number of points per lead:
+N_R = 100 #number of points per branch of the ring
 
 delta_x = L_leads/(N_l-1) #space step for the leads
 delta_s = L_ring/(N_R-1) #space step for the ring
-dt = 5  # ps
+dt = 0.1  # ps
 
 Phi = 1 / 2 # Aharonov-Bohm Phase
-phi_link = Phi / 2*(N_R-1) #fase de AB agregada en cada paso espacial
+phi_link = Phi / (2*(N_R-1)) #fase de AB agregada en cada paso espacial
 phi_U = phi_link  #la fase AB acumulada en upper ring se suma
 phi_D = -phi_link #la fase AB acumulada en lower(down) ring se resta
 phi_L = phi_R = 0 #la fase AB acumulada en los leads left y right son 0 
@@ -32,7 +32,7 @@ alpha = 20    # Rashba Parameter in meV.nm
 phi_so_link = theta_R = m * alpha * delta_s / h_bar**2
 
 lambda_lead = 1j*h_bar*dt/(2*m*delta_x**2)
-lambda_ring = 1j*h_bar/(2*m*delta_s**2)
+lambda_ring = 1j*h_bar*dt/(2*m*delta_s**2)
 
 #constants for the potential function
 V0_L = 0
@@ -268,7 +268,7 @@ def matrix_A_B_generator_single_ring(N_R, k):     #N_R is the numberof points pe
         B[row_up, idx[f"U{i+1}_down"]] = -c(lambda_ring, phi_total)*U_rashba(phi_so_link)[0,1]
         
         #Spin Down
-        phi_total = phi_U - phi_so_link #la fase total incluyendo AB y AC
+        phi_total = phi_U #la fase total incluyendo AB y AC
         A[row_down, idx[f"U{i-1}_down"]] = a(lambda_ring, phi_total)*U_rashba(phi_so_link)[1,1]
         A[row_down, idx[f"U{i-1}_up"]] = a(lambda_ring, phi_total)*U_rashba(phi_so_link)[1,0]
         
@@ -462,12 +462,14 @@ def solve_QR(N_R, k, time_steps):
 
     #fill initial wave packet with only spin up component 
     for j in range(N_l):
-        x = j
+        x = j * delta_x
 
         idx_up = 2*j
         idx_down = 2*j + 1
+        
+        sigma = 20
 
-        psi_old[idx_up] = np.exp(-(x-2)**2) * np.exp(1j*k*x)
+        psi_old[idx_up] = np.exp(-(x-50)**2/(2*sigma**2)) * np.exp(1j*k*x)
         psi_old[idx_down] = 0
         
     psi_array[0] = psi_old
