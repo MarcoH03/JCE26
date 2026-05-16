@@ -1,1 +1,5 @@
-__pycache__/tools.cpython-312.pyc
+__pycache__/
+*.pyc
+
+# Generated simulation outputs live here, but the layout documentation remains versioned.
+RESULTADOS/ejecuciones/
