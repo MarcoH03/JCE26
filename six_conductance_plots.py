@@ -42,6 +42,7 @@ All raw data is saved as .npz files so you can replot without re-running.
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
@@ -223,8 +224,8 @@ def _lineplot(
 # Default resolution (overridable via CLI --n-grid / --n-line)
 # ---------------------------------------------------------------------------
 
-N_GRID = 10   # points per axis for 3-D surface plots  (total runs = N_GRID²)
-N_LINE = 15   # points for 1-D line plots
+N_GRID = 20   # points per axis for 3-D surface plots  (total runs = N_GRID²)
+N_LINE = 50   # points for 1-D line plots
 
 
 # ---------------------------------------------------------------------------
@@ -235,8 +236,8 @@ def plot1(n_leads: int = N_GRID, n_U: int = N_GRID) -> None:
     PHI_SO = 24.05
 
     # ---- sweep range: edit start, stop, n_points here ----
-    U_L_vals = np.linspace(0.01, 6.0, n_leads)   # [meV/nm²]
-    U_U_vals = np.linspace(0.01, 6.0, n_U)        # [meV/nm²]
+    U_L_vals = np.linspace(0.0, 3.0, n_leads)   # [meV/nm²]
+    U_U_vals = np.linspace(0.0, 3.0, n_U)        # [meV/nm²]
     # -------------------------------------------------------
 
     _print_sweep_info("Plot 1", {"U_leads": U_L_vals, "U_U": U_U_vals},
@@ -271,7 +272,7 @@ def plot2(n_line: int = N_LINE) -> None:
     U_U_FIX = 0.1    # meV/nm²
 
     # ---- sweep range ----
-    U_L_vals = np.linspace(0.01, 6.0, n_line)   # [meV/nm²]
+    U_L_vals = np.linspace(1, 4.0, n_line)   # [meV/nm²]
     # ---------------------
 
     _print_sweep_info("Plot 2", {"U_leads": U_L_vals},
@@ -301,8 +302,8 @@ def plot3(n_leads: int = N_GRID, n_phi: int = N_GRID) -> None:
     U_U_FIX = 2.78   # meV/nm²
 
     # ---- sweep range ----
-    U_L_vals    = np.linspace(0.01, 6.0,  n_leads)
-    phi_so_vals = np.linspace(0.5,  30.0, n_phi)
+    U_L_vals    = np.linspace(1, 6.0,  n_leads)
+    phi_so_vals = np.linspace(0.0, 2.0, n_phi)
     # ---------------------
 
     _print_sweep_info("Plot 3", {"U_leads": U_L_vals, "phi_so": phi_so_vals},
@@ -338,7 +339,7 @@ def plot4(n_line: int = N_LINE) -> None:
     U_U_FIX = 2.78   # meV/nm²
 
     # ---- sweep range ----
-    U_L_vals = np.linspace(0.01, 6.0, n_line)
+    U_L_vals = np.linspace(0.0, 6.0, n_line)
     # ---------------------
 
     _print_sweep_info("Plot 4", {"U_leads": U_L_vals},
@@ -369,7 +370,7 @@ def plot5(n_line: int = N_LINE) -> None:
     U_U_FIX = 0.2    # meV/nm²
 
     # ---- sweep range ----
-    phi_so_vals = np.linspace(0.5, 30.0, n_line)
+    phi_so_vals = np.linspace(-6.0, 6.0, n_line)
     # ---------------------
 
     _print_sweep_info("Plot 5", {"phi_so": phi_so_vals},
@@ -401,7 +402,7 @@ def plot6(n_line: int = N_LINE) -> None:
     U_U_FIX = 0.2    # meV/nm²
 
     # ---- sweep range ----
-    phi_so_vals = np.linspace(0.5, 30.0, n_line)
+    phi_so_vals = np.linspace(-6.0, 6.0, n_line)
     # ---------------------
 
     _print_sweep_info("Plot 6", {"phi_so": phi_so_vals},
@@ -502,3 +503,5 @@ Examples
     elapsed = time.perf_counter() - wall_t0
     print(f"\nAll done in {elapsed:.1f} s  ({elapsed/60:.1f} min).")
     print(f"Results in: {OUTPUT_DIR.resolve()}")
+    # At the end of your script, after all plots are done
+    os.system('afplay /System/Library/Sounds/Glass.aiff')
