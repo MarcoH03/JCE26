@@ -437,8 +437,8 @@ def plot_sweep_conductance(
     y   = sweep.G_over_G0_values
 
     fig, ax = plt.subplots(figsize=(9, 5))
-    ax.plot(x, y, "o-", color="tab:blue", linewidth=1.8,
-            markersize=5, label="Numérico (wavepacket)", linestyle="solid")
+    ax.plot(x, y, "-", color="tab:blue", linewidth=1.8,
+            label="Numérico (wavepacket)")
 
     if analytical_values is not None:
         ax.plot(x, np.asarray(analytical_values), "s--", color="tab:orange",
@@ -510,13 +510,14 @@ if __name__ == "__main__":
     base = t.default_params()
 
     # ---- Example 1: sweep alpha ----
-    alpha_values = np.linspace(0, 20, 20)   # -20 to 20 meV·nm in 40 steps
+    alpha_values = np.linspace(0, 10, 2000)   # -20 to 20 meV·nm in 40 steps
     sweep_alpha = sweep_conductance(
         base_params=base,
         sweep_parameter="alpha",
         sweep_values=alpha_values,
         fermi_energy_mev=4.19,
-        total_time_ps=13.5,
+        total_time_ps=20.5,
+        keep_time_series= True,
         verbose=True,
     )
     plot_sweep_conductance(
@@ -526,10 +527,10 @@ if __name__ == "__main__":
     save_sweep_results_npz(sweep_alpha, "conductance_vs_alpha.npz")
 
     # ---- Example 2: sweep V0_U (upper arm barrier offset) ----
-    V0_values = np.linspace(0.0, 0.5, 11)
+    V0_values = np.linspace(0.0, 3, 100)
     sweep_V0U = sweep_conductance(
         base_params=base,
-        sweep_parameter="V0_U",
+        sweep_parameter="Ux_U",
         sweep_values=V0_values,
         fermi_energy_mev=4.19,
         total_time_ps=13.5,

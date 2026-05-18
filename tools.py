@@ -66,20 +66,21 @@ class PhysicsParams:
     # - "legacy_localized_qpc": rehabilitated version of the original QPC idea,
     #   localized and capped so it does not create unphysical wells.
     # - "legacy_unbounded_qpc": original formula kept only for comparison/debugging.
-    potential_model: str = "legacy_unbounded_qpc"
+    #"saddle_point_1d" 
+    potential_model: str = "none"
 
     # ---- legacy / localized QPC parameters ----------------------------------
     V0_L: float = 0.0
-    Ux_L: float = 6
-    Uy_L: float = 0.6
+    Ux_L: float = 0.0
+    Uy_L: float = 0.0
 
     V0_U: float = 0.0
-    Ux_U: float = 0.2
-    Uy_U: float = 0.2
+    Ux_U: float = 0.01
+    Uy_U: float = 0.01
 
     V0_R: float = 0.0
-    Ux_R: float = 6
-    Uy_R: float = 6
+    Ux_R: float = 0.0
+    Uy_R: float = 0.0
 
     s0_L_fraction: float = 0.05   # QPC center as a fraction of L_leads
     s0_U_fraction: float = 0.50   # QPC center as a fraction of L_ring
@@ -389,6 +390,17 @@ def section_longitudinal_curvature(p: PhysicsParams, section: str) -> float:
 
 
 def gaussian_qpc_potential(p: PhysicsParams, section: str, s_nm: float) -> float:
+    """Gaussian-shaped barrier along the propagation direction.
+
+    V(s) = h * exp(-0.5 * ((s - s0) / sigma)^2)
+    where h     = gaussian_qpc_heights_mev[section]  [meV]
+          sigma = gaussian_qpc_widths_nm[section]     [nm]
+
+    Height and width are decoupled parameters, making sweeps straightforward
+    in the time-domain setting.  This does NOT directly reproduce the thesis
+    saddle-point potential (eq 2.2): for a 1-D faithful proxy use
+    potential_model = "saddle_point_1d".
+    """
     height_mev = p.gaussian_qpc_heights_mev.get(section, 0.0)
     if height_mev <= 0.0:
         return 0.0
@@ -396,6 +408,61 @@ def gaussian_qpc_potential(p: PhysicsParams, section: str, s_nm: float) -> float
     center_nm  = section_qpc_center_nm(p, section)
     normalized = (s_nm - center_nm) / width_nm
     return float(height_mev * np.exp(-0.5 * normalized**2))
+
+
+def saddle_point_1d_qpc_potential(p: PhysicsParams, section: str, s_nm: float) -> float:
+    """Faithful 1-D projection of the thesis saddle-point QPC potential.
+
+    The thesis (eq 2.2) defines the 2-D saddle-point potential:
+        V_SP(x, y) = -Ux*x^2 + Uy*y^2 + V0
+
+    Along the propagation axis (y fixed at the guided-centre y_gc=0):
+        V(x) = V0 - Ux*x^2
+
+    This is an inverted parabola peaking at x=0 with height V0. Truncated
+    at V=0 to keep it localized, giving a half-width x_c = sqrt(V0/Ux).
+
+    The transverse mode contributes a zero-point energy that raises the
+    effective barrier experienced by carriers in the n=0 Landau level:
+        V0_eff = V0 + hbar*sqrt(2*Uy/m)/2
+
+    This matches the threshold in the analytical T formula (thesis eq 2.36):
+        epsilon = (E_g - V0) / E1,  E_g = E_F - E2*(n+1/2)
+    where E2 is proportional to sqrt(Uy) and E1 to sqrt(Ux).
+
+    Parameters:
+        V0  -> V0_L / V0_U / V0_R    [meV]        saddle-point offset
+        Ux  -> Ux_L / Ux_U / Ux_R    [meV/nm^2]   longitudinal curvature
+        Uy  -> Uy_L / Uy_U / Uy_R    [meV/nm^2]   transverse curvature
+
+    Important limitation: when Ux == Uy and B == 0, the analytical E1 from
+    the thesis is zero (degenerate saddle), giving T = 0.5 regardless of Ux.
+    The 1-D parabolic potential still varies with Ux (wider barrier = lower T),
+    which is physically more intuitive for time-domain wavepacket scattering
+    even though it differs from the strict analytical formula in that limit.
+    """
+    if section == "D":
+        return 0.0
+    if section == "L":
+        Ux, Uy, V0 = p.Ux_L, p.Uy_L, p.V0_L
+    elif section == "U":
+        Ux, Uy, V0 = p.Ux_U, p.Uy_U, p.V0_U
+    elif section == "R":
+        Ux, Uy, V0 = p.Ux_R, p.Uy_R, p.V0_R
+    else:
+        raise ValueError(f"Unknown section {section!r}")
+
+    # Effective barrier height = saddle offset + transverse zero-point energy
+    zpe    = 0.5 * h_bar * np.sqrt(2.0 * max(Uy, 0.0) / p.m) if Uy > 0 else 0.0
+    V0_eff = V0 + zpe
+
+    if V0_eff <= 0.0 or Ux <= 0.0:
+        return 0.0
+
+    center_nm  = section_qpc_center_nm(p, section)
+    dx         = s_nm - center_nm
+    V_parabola = V0_eff - Ux * dx**2
+    return float(max(0.0, V_parabola))
 
 
 def legacy_unbounded_qpc_potential(p: PhysicsParams, section: str, s_nm: float) -> float:
@@ -431,6 +498,8 @@ def V(p: PhysicsParams, section: str, i: int) -> float:
         return 0.0
     if p.potential_model == "gaussian_qpc":
         return gaussian_qpc_potential(p, section, s_nm)
+    if p.potential_model == "saddle_point_1d":
+        return saddle_point_1d_qpc_potential(p, section, s_nm)
     if p.potential_model == "legacy_localized_qpc":
         return legacy_localized_qpc_potential(p, section, s_nm)
     if p.potential_model == "legacy_unbounded_qpc":

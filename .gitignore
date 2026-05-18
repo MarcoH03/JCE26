@@ -4,3 +4,4 @@ __pycache__/
 # Generated simulation outputs live here, but the layout documentation remains versioned.
 RESULTADOS/ejecuciones/
 conductance_plots
+gaussian_qpc_plots

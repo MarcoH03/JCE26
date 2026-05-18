@@ -36,8 +36,8 @@ TOTAL_TIME_PS    = 13.5
 SNAPSHOT_COUNT   = 8
 MIN_PLOT_DENSITY_MAX      = 1.0
 MAX_PLOT_DENSITY          = 1e6
-INITIAL_PACKET_CENTER_FRACTION = 0.8
-INITIAL_PACKET_WIDTH_NM        = 150.0
+INITIAL_PACKET_CENTER_FRACTION = 0.5
+INITIAL_PACKET_WIDTH_NM        = 1000.0
 
 
 # ---------------------------------------------------------------------------
