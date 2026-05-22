@@ -56,6 +56,7 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 
 import tools as t
 from conductance import run_single_conductance
+from conductance import run_cap_conductance
 
 
 # ---------------------------------------------------------------------------
@@ -96,9 +97,9 @@ def make_params(
 # ---------------------------------------------------------------------------
 
 FERMI_ENERGY_MEV = 4.19
-TOTAL_TIME_PS = 13.5
+TOTAL_TIME_PS = 30.5
 PACKET_CENTER_FRACTION = 0.8
-PACKET_WIDTH_NM = 150.0
+PACKET_WIDTH_NM = 250.0
 
 BASE_PARAMS = t.default_params()
 
@@ -106,7 +107,7 @@ BASE_PARAMS = t.default_params()
 def compute_G(U_leads: float, U_U: float, phi_so: float, verbose: bool = False) -> float:
     """Return G/G0 for a single point."""
     p = make_params(U_leads, U_U, phi_so, BASE_PARAMS)
-    result = run_single_conductance(
+    result = run_cap_conductance(
         p,
         fermi_energy_mev=FERMI_ENERGY_MEV,
         total_time_ps=TOTAL_TIME_PS,

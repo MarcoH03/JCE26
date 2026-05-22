@@ -57,6 +57,88 @@ import tools as t
 # ---------------------------------------------------------------------------
 G0_SIEMENS = 3.87404e-5   # e²/h in Siemens (quantum of conductance)
 
+# ---------------------------------------------------------------------------
+# Complex Absorbing Potential (CAP) utilities
+# ---------------------------------------------------------------------------
+# The CAP adds a negative-imaginary on-site term -i*W(x) to the outer fraction
+# of each lead.  This makes H intentionally non-Hermitian:
+#   - Norm lost in the LEFT  CAP region  =  reflected probability R
+#   - Norm lost in the RIGHT CAP region  =  transmitted probability T
+# Integrating the absorption over time gives R and T without needing to gate
+# on an echo cutoff, and the simulation can run for as long as desired.
+#
+# W(x) rises as a smooth monomial ramp over the outer cap_fraction of the lead:
+#   W(x) = cap_strength * ((x - x_start) / cap_length)^cap_order   (meV)
+#
+# The CAP is disabled by default (cap_strength=0); set cap_strength > 0 to use it.
+
+def build_cap_vector(
+    layout: t.SingleRingLayout,
+    p: t.PhysicsParams,
+    cap_fraction: float = 0.25,
+    cap_strength: float = 0.0,
+    cap_order: int = 3,
+) -> np.ndarray:
+    """Return a real vector W [meV] of CAP absorption strengths, one per site.
+
+    Only the outer ``cap_fraction`` of each lead is absorbing.  All ring and
+    junction sites have W = 0.
+
+    Parameters
+    ----------
+    cap_fraction : float
+        Fraction of each lead length covered by the CAP ramp (default 0.25).
+    cap_strength : float
+        Peak absorption strength in meV (default 0 = disabled).
+    cap_order : int
+        Polynomial order of the ramp (default 3; higher = sharper onset).
+    """
+    n_sites = layout.unique_site_count
+    W       = np.zeros(n_sites, dtype=float)
+    if cap_strength <= 0.0:
+        return W
+
+    n_lead = layout.left_lead_sites.size    # = p.N_l
+    n_cap  = max(1, int(np.ceil(cap_fraction * n_lead)))
+
+    # Left lead: absorber at the FAR end (sites 0..n_cap-1)
+    for i in range(n_cap):
+        ramp_coord = (n_cap - 1 - i) / (n_cap - 1) if n_cap > 1 else 1.0
+        W[layout.left_lead_sites[i]] = cap_strength * ramp_coord**cap_order
+
+    # Right lead: absorber at the FAR end (last n_cap sites)
+    for i in range(n_cap):
+        ramp_coord = i / (n_cap - 1) if n_cap > 1 else 1.0
+        W[layout.right_lead_sites[-(i + 1)]] = cap_strength * ramp_coord**cap_order
+
+    return W
+
+
+def build_cn_matrices_with_cap(
+    p: t.PhysicsParams,
+    layout: t.SingleRingLayout,
+    cap_vector: np.ndarray,
+) -> tuple[sp.csr_matrix, sp.csr_matrix]:
+    """Return (A, B) Crank-Nicolson matrices for a non-Hermitian H + CAP.
+
+    H_eff = H_physical - i * diag(W)  (spinor-expanded)
+
+    The spinor expansion repeats each site's W for both spin components.
+    """
+    H_phys = t.build_single_ring_hamiltonian(p, layout)
+
+    # Expand CAP to spinor space: site s -> rows 2s and 2s+1
+    W_spinor = np.repeat(cap_vector, 2)
+    H_cap    = sp.diags(-1j * W_spinor, format="csr")
+    H_eff    = H_phys + H_cap
+
+    identity  = sp.identity(layout.spinor_size, format="csr", dtype=complex)
+    prefactor = 1j * p.dt / (2 * t.h_bar)
+    A = (identity + prefactor * H_eff).tocsr()
+    B = (identity - prefactor * H_eff).tocsr()
+    return A, B
+
+
 
 # ---------------------------------------------------------------------------
 # Result containers
@@ -321,6 +403,144 @@ def run_single_conductance(
     )
 
 
+
+# ---------------------------------------------------------------------------
+# CAP-based conductance (open-boundary scattering)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CAPConductanceResult:
+    """Result from a CAP-based conductance measurement."""
+    params: t.PhysicsParams
+    fermi_energy_mev: float
+    T: float            # transmission coefficient
+    R: float            # reflection coefficient
+    T_plus_R: float     # should be ~1.0 if CAP is well-tuned
+    G_over_G0: float
+    G_siemens: float
+    total_time_ps: float
+    wall_seconds: float
+    # Optional time series
+    time_axis_ps: np.ndarray | None = None
+    P_left_cap_rate: np.ndarray | None = None   # dR/dt
+    P_right_cap_rate: np.ndarray | None = None  # dT/dt
+
+
+def run_cap_conductance(
+    p: t.PhysicsParams,
+    fermi_energy_mev: float = 4.19,
+    total_time_ps: float = 30.0,
+    packet_center_fraction: float = 0.8,
+    packet_width_nm: float = 150.0,
+    cap_fraction: float = 0.25,
+    cap_strength: float = 2.0,
+    cap_order: int = 3,
+    keep_time_series: bool = False,
+    verbose: bool = True,
+) -> "CAPConductanceResult":
+    """Measure conductance using a Complex Absorbing Potential.
+
+    The CAP absorbs outgoing probability at both ends of each lead.
+    Norm absorbed in the right CAP = transmitted probability T.
+    Norm absorbed in the left  CAP = reflected probability R.
+    T + R should equal 1 (verify this as a diagnostic).
+
+    The simulation can run much longer than the echo_cutoff because the
+    echoes are absorbed before they can return to the scattering region.
+
+    Parameters
+    ----------
+    total_time_ps : float
+        Run duration.  Should be long enough for the packet to fully clear
+        the scattering region and be absorbed.  Typical: 2-3× the wavepacket
+        transit time = (L_leads + L_ring) / v_group.
+    cap_fraction : float
+        Fraction of each lead covered by the absorber (default 0.25).
+    cap_strength : float
+        Peak CAP strength in meV.  Rule of thumb: 1-5 meV.  Too small leaves
+        reflections; too large causes artificial back-reflection at the ramp onset.
+    cap_order : int
+        Ramp polynomial order (default 3).
+    """
+    wall_start = time.perf_counter()
+    layout     = t.build_single_ring_layout(p)
+    k          = compute_wave_number(p, fermi_energy_mev)
+    time_steps = t.time_steps_for_duration(p, total_time_ps)
+
+    if verbose:
+        v = t.lead_group_velocity(p, k)
+        transit = (p.L_leads + p.L_ring) / v
+        print(f"  CAP run: α={p.alpha:.1f} meV·nm | cap_str={cap_strength:.2f} meV "
+              f"| transit≈{transit:.1f} ps | total={total_time_ps:.1f} ps")
+
+    cap_vec = build_cap_vector(layout, p, cap_fraction, cap_strength, cap_order)
+    A, B    = build_cn_matrices_with_cap(p, layout, cap_vec)
+    solver  = spla.factorized(A.tocsc())
+
+    psi = build_initial_wavefunction(
+        p, layout, k, packet_center_fraction, packet_width_nm)
+    N0  = _weighted_total_probability(psi, layout)
+
+    # Identify CAP sites (W > 0)
+    left_cap_sites  = layout.left_lead_sites[cap_vec[layout.left_lead_sites] > 0]
+    right_cap_sites = layout.right_lead_sites[cap_vec[layout.right_lead_sites] > 0]
+    # CAP absorption strengths at those sites (spinor: repeat twice)
+    W_left  = cap_vec[left_cap_sites]
+    W_right = cap_vec[right_cap_sites]
+
+    T_absorbed = 0.0   # cumulative transmitted probability
+    R_absorbed = 0.0   # cumulative reflected probability
+
+    P_left_series  = np.empty(time_steps + 1) if keep_time_series else None
+    P_right_series = np.empty(time_steps + 1) if keep_time_series else None
+    if keep_time_series:
+        P_left_series[0]  = 0.0
+        P_right_series[0] = 0.0
+
+    for step in range(time_steps):
+        psi = solver(B @ psi)
+
+        # Absorption rate at each CAP site: dP/dt = (2/hbar) * W * |psi|^2
+        psi_block = psi.reshape(-1, 2)
+
+        density_left  = np.sum(np.abs(psi_block[left_cap_sites])**2,  axis=1)
+        density_right = np.sum(np.abs(psi_block[right_cap_sites])**2, axis=1)
+
+        # Integrate absorption over time step (factor 2/hbar from the imaginary term)
+        dR = (2.0 / t.h_bar) * np.dot(W_left,  density_left)  * p.dt
+        dT = (2.0 / t.h_bar) * np.dot(W_right, density_right) * p.dt
+        R_absorbed += dR
+        T_absorbed += dT
+
+        if keep_time_series:
+            P_left_series[step + 1]  = R_absorbed
+            P_right_series[step + 1] = T_absorbed
+
+    # Normalise by initial norm
+    T = T_absorbed / N0 if N0 > 0 else 0.0
+    R = R_absorbed / N0 if N0 > 0 else 0.0
+    T = min(T, 1.0)   # clamp numerical noise
+
+    wall_seconds = time.perf_counter() - wall_start
+    if verbose:
+        print(f"    → T={T:.6f}  R={R:.6f}  T+R={T+R:.4f}  [{wall_seconds:.1f} s]")
+
+    return CAPConductanceResult(
+        params=p,
+        fermi_energy_mev=fermi_energy_mev,
+        T=T,
+        R=R,
+        T_plus_R=T + R,
+        G_over_G0=T,
+        G_siemens=T * G0_SIEMENS,
+        total_time_ps=total_time_ps,
+        wall_seconds=wall_seconds,
+        time_axis_ps=(np.arange(time_steps + 1, dtype=float) * p.dt
+                      if keep_time_series else None),
+        P_left_cap_rate=P_left_series,
+        P_right_cap_rate=P_right_series,
+    )
+
 # ---------------------------------------------------------------------------
 # Parameter sweep engine
 # ---------------------------------------------------------------------------
@@ -329,6 +549,7 @@ def sweep_conductance(
     base_params: t.PhysicsParams,
     sweep_parameter: str,
     sweep_values: list[float] | np.ndarray,
+    with_cap: bool = False,
     fermi_energy_mev: float = 4.19,
     total_time_ps: float = 13.5,
     packet_center_fraction: float = 0.8,
@@ -359,15 +580,26 @@ def sweep_conductance(
     for i, val in enumerate(sweep_values):
         print(f"[{i+1}/{len(sweep_values)}] {sweep_parameter}={val}")
         p_i = base_params.with_changes(**{sweep_parameter: val})
-        cr  = run_single_conductance(
-            p_i,
-            fermi_energy_mev=fermi_energy_mev,
-            total_time_ps=total_time_ps,
-            packet_center_fraction=packet_center_fraction,
-            packet_width_nm=packet_width_nm,
-            keep_time_series=keep_time_series,
-            verbose=verbose,
-        )
+        if with_cap:
+            cr = run_cap_conductance(
+                p_i,
+                fermi_energy_mev=fermi_energy_mev,
+                total_time_ps=total_time_ps,
+                packet_center_fraction=packet_center_fraction,
+                packet_width_nm=packet_width_nm,
+                keep_time_series=keep_time_series,
+                verbose=verbose,
+            )
+        else:
+            cr  = run_single_conductance(
+                p_i,
+                fermi_energy_mev=fermi_energy_mev,
+                total_time_ps=total_time_ps,
+                packet_center_fraction=packet_center_fraction,
+                packet_width_nm=packet_width_nm,
+                keep_time_series=keep_time_series,
+                verbose=verbose,
+            )
         result.results.append(cr)
 
     return result
@@ -437,8 +669,8 @@ def plot_sweep_conductance(
     y   = sweep.G_over_G0_values
 
     fig, ax = plt.subplots(figsize=(9, 5))
-    ax.plot(x, y, "-", color="tab:blue", linewidth=1.8,
-            label="Numérico (wavepacket)")
+    ax.plot(x, y, "o-", color="tab:blue", linewidth=1.8,
+            markersize=5, label="Numérico (wavepacket)")
 
     if analytical_values is not None:
         ax.plot(x, np.asarray(analytical_values), "s--", color="tab:orange",
@@ -510,14 +742,14 @@ if __name__ == "__main__":
     base = t.default_params()
 
     # ---- Example 1: sweep alpha ----
-    alpha_values = np.linspace(0, 10, 2000)   # -20 to 20 meV·nm in 40 steps
+    alpha_values = np.linspace(0, 60, 13)   # 0 to 60 meV·nm in 13 steps
     sweep_alpha = sweep_conductance(
         base_params=base,
         sweep_parameter="alpha",
         sweep_values=alpha_values,
+        with_cap=True,
         fermi_energy_mev=4.19,
-        total_time_ps=20.5,
-        keep_time_series= True,
+        total_time_ps=30.0,
         verbose=True,
     )
     plot_sweep_conductance(
@@ -527,10 +759,10 @@ if __name__ == "__main__":
     save_sweep_results_npz(sweep_alpha, "conductance_vs_alpha.npz")
 
     # ---- Example 2: sweep V0_U (upper arm barrier offset) ----
-    V0_values = np.linspace(0.0, 3, 100)
+    V0_values = np.linspace(0.0, 0.5, 11)
     sweep_V0U = sweep_conductance(
         base_params=base,
-        sweep_parameter="Ux_U",
+        sweep_parameter="V0_U",
         sweep_values=V0_values,
         fermi_energy_mev=4.19,
         total_time_ps=13.5,

@@ -37,7 +37,7 @@ SNAPSHOT_COUNT   = 8
 MIN_PLOT_DENSITY_MAX      = 1.0
 MAX_PLOT_DENSITY          = 1e6
 INITIAL_PACKET_CENTER_FRACTION = 0.5
-INITIAL_PACKET_WIDTH_NM        = 1000.0
+INITIAL_PACKET_WIDTH_NM        = 200.0
 
 
 # ---------------------------------------------------------------------------

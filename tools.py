@@ -60,27 +60,20 @@ class PhysicsParams:
     alpha: float = 20.0   # Rashba strength, meV·nm
 
     # ---- potential model selector -------------------------------------------
-    # Options:
-    # - "none": flat potential, useful as a transport baseline.
-    # - "gaussian_qpc": smooth calibrated barrier used for the asymptotic benchmark.
-    # - "legacy_localized_qpc": rehabilitated version of the original QPC idea,
-    #   localized and capped so it does not create unphysical wells.
-    # - "legacy_unbounded_qpc": original formula kept only for comparison/debugging.
-    #"saddle_point_1d" 
     potential_model: str = "none"
 
     # ---- legacy / localized QPC parameters ----------------------------------
     V0_L: float = 0.0
-    Ux_L: float = 0.0
-    Uy_L: float = 0.0
+    Ux_L: float = 0.01
+    Uy_L: float = 0.01
 
     V0_U: float = 0.0
     Ux_U: float = 0.01
     Uy_U: float = 0.01
 
     V0_R: float = 0.0
-    Ux_R: float = 0.0
-    Uy_R: float = 0.0
+    Ux_R: float = 0.01
+    Uy_R: float = 0.01
 
     s0_L_fraction: float = 0.05   # QPC center as a fraction of L_leads
     s0_U_fraction: float = 0.50   # QPC center as a fraction of L_ring
@@ -127,7 +120,12 @@ class PhysicsParams:
 
     @property
     def phi_link(self) -> float:
-        return self.Phi / (2 * (self.N_R - 1))
+        # Correct AB phase per hop (eq. 11 in the physics notes):
+        # total phase difference between arms = 2*pi*Phi/Phi0.
+        # Distributed symmetrically: each upper hop gets +pi*Phi/(N_R-1),
+        # each lower hop gets -pi*Phi/(N_R-1).
+        # Previous formula Phi/(2*(N_R-1)) was missing the factor 2*pi.
+        return np.pi * self.Phi / (self.N_R - 1)
 
     @property
     def phi_U(self) -> float:
@@ -247,15 +245,33 @@ def _is_close_to_zero(value: complex, tolerance: float = 1e-15) -> bool:
     return abs(value) < tolerance
 
 
-def U_rashba(theta: float) -> np.ndarray:
-    """Return the 2×2 spin rotation for a single ring hop."""
+def U_rashba(theta: float, phi_bar: float = 0.0) -> np.ndarray:
+    """Return the 2×2 Rashba spin-rotation operator for one ring hop.
+
+    Correct form (eq. 12 in the physics notes):
+        U_R = cos(theta)*I + i*sin(theta)*sigma_r(phi_bar)
+    where sigma_r(phi_bar) = cos(phi_bar)*sigma_x + sin(phi_bar)*sigma_y
+                           = [[0, e^{-i*phi_bar}], [e^{i*phi_bar}, 0]]
+    is the radial Pauli matrix evaluated at the azimuthal midpoint of the hop,
+    and theta = sarm * phi_so_link carries the arm-dependent traversal sign.
+
+    Parameters
+    ----------
+    theta : float
+        Rashba rotation angle for this hop = sarm * phi_so_link.
+        sarm = -1 for upper arm (traverses +phi), +1 for lower arm (-phi).
+    phi_bar : float
+        Azimuthal midpoint of the hop in radians.
+        Upper arm hop k: phi_bar = (k+0.5)*pi/(N_R-1),  k = 0..N_R-2
+        Lower arm hop k: phi_bar = -(k+0.5)*pi/(N_R-1)
+
+    Note: The reverse hop (right->left) uses U.conj().T, preserving Hermiticity.
+    """
     if theta == 0.0:
         return np.eye(2, dtype=complex)
-    return np.array(
-        [[np.cos(theta), -np.sin(theta)],
-         [np.sin(theta),  np.cos(theta)]],
-        dtype=complex,
-    )
+    sr = np.array([[0.0, np.exp(-1j * phi_bar)],
+                   [np.exp(1j * phi_bar), 0.0]], dtype=complex)
+    return np.cos(theta) * np.eye(2, dtype=complex) + 1j * np.sin(theta) * sr
 
 
 def build_single_ring_layout(p: PhysicsParams | None = None) -> SingleRingLayout:
@@ -555,9 +571,9 @@ def summarize_potential_by_section(p: PhysicsParams, layout: SingleRingLayout) -
 def build_single_ring_hamiltonian(p: PhysicsParams, layout: SingleRingLayout) -> sp.csr_matrix:
     """Build the Hermitian graph Hamiltonian for the given parameter set."""
     hamiltonian      = sp.lil_matrix((layout.spinor_size, layout.spinor_size), dtype=complex)
-    spin_identity    = np.eye(2, dtype=complex)
-    spin_rotation    = U_rashba(p.phi_so_link)
-    site_potential   = build_site_potential(p, layout)
+    spin_identity  = np.eye(2, dtype=complex)
+    site_potential = build_site_potential(p, layout)
+    N_hops         = p.N_R - 1  # hops per arm
 
     def add_spin_block(site_row: int, site_col: int, block: np.ndarray) -> None:
         row_slice = _spin_slice(site_row)
@@ -591,11 +607,24 @@ def build_single_ring_hamiltonian(p: PhysicsParams, layout: SingleRingLayout) ->
     for sl, sr in zip(layout.right_lead_sites[:-1], layout.right_lead_sites[1:]):
         add_link(sl, sr, p.t_lead, 0.0, spin_identity)
 
-    for sl, sr in zip(layout.upper_arm_sites[:-1], layout.upper_arm_sites[1:]):
-        add_link(sl, sr, p.t_ring, p.phi_U, spin_rotation)
+    # Upper arm: sarm = -1 (traverses from phi=0 to phi=pi in +phi direction,
+    # but Rashba coupling convention gives sarm=-1 per the physics notes eq 12).
+    # Hop k (0-indexed): azimuthal midpoint phi_bar = (k+0.5)*pi/N_hops
+    for k, (sl, sr) in enumerate(zip(layout.upper_arm_sites[:-1],
+                                     layout.upper_arm_sites[1:])):
+        phi_bar   = (k + 0.5) * np.pi / N_hops
+        theta     = -p.phi_so_link          # sarm = -1 for upper arm
+        spin_mat  = U_rashba(theta, phi_bar)
+        add_link(sl, sr, p.t_ring, p.phi_U, spin_mat)
 
-    for sl, sr in zip(layout.lower_arm_sites[:-1], layout.lower_arm_sites[1:]):
-        add_link(sl, sr, p.t_ring, p.phi_D, spin_rotation)
+    # Lower arm: sarm = +1 (traverses from phi=0 to phi=-pi, i.e. azimuth decreases).
+    # Hop k: azimuthal midpoint phi_bar = -(k+0.5)*pi/N_hops
+    for k, (sl, sr) in enumerate(zip(layout.lower_arm_sites[:-1],
+                                     layout.lower_arm_sites[1:])):
+        phi_bar   = -(k + 0.5) * np.pi / N_hops
+        theta     = +p.phi_so_link          # sarm = +1 for lower arm
+        spin_mat  = U_rashba(theta, phi_bar)
+        add_link(sl, sr, p.t_ring, p.phi_D, spin_mat)
 
     return hamiltonian.tocsr()
 
