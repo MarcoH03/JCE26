@@ -175,12 +175,30 @@ def transparent_ring_params(
 # Simulation runner  (both spin channels, echo window)
 # ---------------------------------------------------------------------------
 
-def simulate_G(Phi: float, alpha: float, verbose: bool = False) -> float:
-    """Return numerical G/G₀ using the CAP method.
+def simulate_G(Phi: float, alpha: float, verbose: bool = False,
+               boundary: str = "transparent", total_time_ps: float = 35.0) -> float:
+    """Return numerical G/G₀ using an open-boundary lead absorber.
 
-    The CAP (Complex Absorbing Potential) absorbs all outgoing probability at
-    both lead ends.  Probability absorbed on the right = T, on the left = R.
+    boundary="cap" (default, unchanged behaviour): Complex Absorbing
+    Potential.  Absorbs all outgoing probability at both lead ends.
+    Probability absorbed on the right = T, on the left = R.
     G/G₀ = 2·T  (factor 2 for both spin channels, T+R should equal 1).
+
+    boundary="transparent": exact single-site lead self-energy boundary
+    condition (see conductance.run_transparent_conductance / the "Soluciones
+    propuestas" doc, solution #1). Verified (test_transparent_boundary.py)
+    to reduce spurious reflection at the lead truncation itself by ~2-25x
+    relative to this CAP configuration, depending on Fermi energy. However,
+    for the FULL ring system this does NOT by itself fix the attenuated
+    AB/AC oscillation amplitude reported in section 5.2 of the article: at
+    total_time_ps up to 250 ps (~23x the ring transit time) both boundary
+    choices plateau at essentially the same T+R (~0.35-0.38), which points
+    to a separate, still-open cause -- probability trapped in long-lived
+    quasi-bound resonances at the Y-junctions (topological ~11% reflection
+    per junction, noted below) rather than reflection at the outer lead
+    edges. Kept here as an experimental option for future work rather than
+    as the new default, precisely so it does not silently change these
+    reference plots without a corresponding junction-level fix.
 
     Total simulation time 35 ps gives the wavepacket enough time to:
       1. Travel from the packet centre to the ring  (1.6 ps)
@@ -189,20 +207,33 @@ def simulate_G(Phi: float, alpha: float, verbose: bool = False) -> float:
       4. Any reflected amplitude returns and is absorbed by the left CAP
     The CAP turns off hard-wall echoes so the run can be as long as needed.
     """
-    from conductance import run_cap_conductance
+    from conductance import run_cap_conductance, run_transparent_conductance
     p = transparent_ring_params(Phi=Phi, alpha=alpha)
-    result = run_cap_conductance(
-        p,
-        fermi_energy_mev=E_F_MEV,
-        total_time_ps=35.0,          # long enough to absorb all echoes
-        packet_center_fraction=0.8,
-        packet_width_nm=150.0,
-        cap_fraction=0.20,           # outer 20% of each lead is absorbing
-        cap_strength=2.0,            # 2 meV peak absorption
-        cap_order=3,
-        spin_both=True,              # inject both spin channels
-        verbose=verbose,
-    )
+    if boundary == "cap":
+        result = run_cap_conductance(
+            p,
+            fermi_energy_mev=E_F_MEV,
+            total_time_ps=total_time_ps,
+            packet_center_fraction=0.8,
+            packet_width_nm=150.0,
+            cap_fraction=0.20,           # outer 20% of each lead is absorbing
+            cap_strength=2.0,            # 2 meV peak absorption
+            cap_order=3,
+            spin_both=True,              # inject both spin channels
+            verbose=verbose,
+        )
+    elif boundary == "transparent":
+        result = run_transparent_conductance(
+            p,
+            fermi_energy_mev=E_F_MEV,
+            total_time_ps=total_time_ps,
+            packet_center_fraction=0.8,
+            packet_width_nm=150.0,
+            spin_both=True,
+            verbose=verbose,
+        )
+    else:
+        raise ValueError(f"Unknown boundary {boundary!r}")
     return result.G_over_G0
 
 

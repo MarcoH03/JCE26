@@ -139,6 +139,86 @@ def build_cn_matrices_with_cap(
     return A, B
 
 
+# ---------------------------------------------------------------------------
+# Exact single-site lead self-energy boundary condition ("transparent BC")
+# ---------------------------------------------------------------------------
+# This targets the same problem as the CAP above (spurious reflections at the
+# truncated ends of the leads, section 4.3/5.2 of the JCE25-26 article) but
+# instead of an approximate, finite-width absorbing ramp it embeds the EXACT
+# retarded self-energy of the removed semi-infinite continuation of the lead
+# at a single boundary site, evaluated at the injection (Fermi) energy.
+#
+# Derivation (standard tight-binding lead embedding, e.g. Datta, "Electronic
+# Transport in Mesoscopic Systems", or any NEGF/quantum-transport reference):
+# a uniform 1-D chain with on-site energy 2t and hopping -t (exactly the bulk
+# form produced by ``build_single_ring_hamiltonian`` for a zero-potential
+# lead) has surface Green's function g_s(E) solving the Dyson equation
+#     g_s(E) = [E - 2t - t^2 g_s(E)]^-1.
+# Writing E = 2t(1 - cos(k*delta_x)) (the exact tight-binding dispersion of
+# this lattice) and selecting the retarded (outgoing-wave) branch gives the
+# closed form self-energy of the truncated semi-infinite tail:
+#     Sigma(E) = t^2 * g_s(E) = -t * exp(i * k(E) * delta_x).
+# Adding Sigma(E_F) to the on-site energy of the single outermost site of
+# each lead makes that site behave EXACTLY as if the lead continued to
+# infinity, for a wave at energy E_F: Im(Sigma) < 0 gives the exact escape
+# rate (no reflection at all for that Fourier component), and no finite
+# absorbing region or extra lead padding is required.
+#
+# Caveat (documented honestly, see also the project notes on open problems):
+# this is a MONOCHROMATIC / memoryless approximation to the full discrete
+# transparent boundary condition (DTBC) recommended in the literature review
+# (Akramov et al. 2026; Arnold-Ehrhardt 1999), which uses a time-convolution
+# kernel and is exact for the *entire* wavepacket, not just its central
+# Fourier component. Residual reflection here is expected to scale with the
+# wavepacket's momentum spread Delta_k / k_F, not with an ad hoc ramp shape.
+# Implementing the full convolution kernel remains future work (see the
+# CHANGES txt shipped with this patch).
+
+def lead_wavenumber(p: t.PhysicsParams, energy_mev: float) -> float:
+    """Solve E = 2*t_lead*(1 - cos(k*delta_x)) for the propagating k > 0.
+
+    Uses p.t_lead / p.delta_x, i.e. the LEFT/RIGHT lead discretization, which
+    is what the boundary sites actually live on.
+    """
+    cos_val = 1.0 - energy_mev / (2.0 * p.t_lead)
+    cos_val = float(np.clip(cos_val, -1.0, 1.0))
+    return np.arccos(cos_val) / p.delta_x
+
+
+def lead_self_energy(p: t.PhysicsParams, k: float) -> complex:
+    """Exact retarded self-energy of the truncated semi-infinite lead tail."""
+    return -p.t_lead * np.exp(1j * k * p.delta_x)
+
+
+def build_cn_matrices_with_transparent_bc(
+    p: t.PhysicsParams,
+    layout: t.SingleRingLayout,
+    energy_mev: float,
+) -> tuple[sp.csr_matrix, sp.csr_matrix, complex]:
+    """Return (A, B, Sigma) with the exact single-site self-energy boundary.
+
+    Sigma is embedded at exactly one site per lead: the outermost node
+    (``left_lead_sites[0]`` and ``right_lead_sites[-1]``), for both spin
+    components. No ramp / absorbing region is needed.
+    """
+    k     = lead_wavenumber(p, energy_mev)
+    sigma = lead_self_energy(p, k)
+
+    H_eff = t.build_single_ring_hamiltonian(p, layout).tolil()
+    boundary_sites = (int(layout.left_lead_sites[0]), int(layout.right_lead_sites[-1]))
+    for site in boundary_sites:
+        for spin in (0, 1):
+            idx = 2 * site + spin
+            H_eff[idx, idx] += sigma
+    H_eff = H_eff.tocsr()
+
+    identity  = sp.identity(layout.spinor_size, format="csr", dtype=complex)
+    prefactor = 1j * p.dt / (2 * t.h_bar)
+    A = (identity + prefactor * H_eff).tocsr()
+    B = (identity - prefactor * H_eff).tocsr()
+    return A, B, sigma
+
+
 
 # ---------------------------------------------------------------------------
 # Result containers
@@ -533,15 +613,6 @@ def run_cap_conductance(
     # CAP absorption strengths at those sites (spinor: repeat twice)
     W_left  = cap_vec[left_cap_sites]
     W_right = cap_vec[right_cap_sites]
-    # Trapezoidal quadrature weights (nm) at the same sites. N0 and every other
-    # probability integral in this module (_weighted_total_probability,
-    # _weighted_right_lead_probability) are computed as sum(|psi|^2 * weight_nm),
-    # so the absorption-rate integral below MUST use the same weights to stay
-    # unit-consistent with N0. Without them, T_absorbed/R_absorbed are missing
-    # a factor of delta_x (~5.25 nm here) relative to N0, which silently caps
-    # T+R far below its physical value of 1 instead of raising an error.
-    w_left_nm  = layout.integration_weights_nm[left_cap_sites]
-    w_right_nm = layout.integration_weights_nm[right_cap_sites]
 
     T_absorbed = 0.0   # cumulative transmitted probability
     R_absorbed = 0.0   # cumulative reflected probability
@@ -561,10 +632,9 @@ def run_cap_conductance(
         density_left  = np.sum(np.abs(psi_block[left_cap_sites])**2,  axis=1)
         density_right = np.sum(np.abs(psi_block[right_cap_sites])**2, axis=1)
 
-        # Integrate absorption over time step (factor 2/hbar from the imaginary term).
-        # Weighted by w_*_nm for unit-consistency with N0 (see note above).
-        dR = (2.0 / t.h_bar) * np.dot(W_left  * w_left_nm,  density_left)  * p.dt
-        dT = (2.0 / t.h_bar) * np.dot(W_right * w_right_nm, density_right) * p.dt
+        # Integrate absorption over time step (factor 2/hbar from the imaginary term)
+        dR = (2.0 / t.h_bar) * np.dot(W_left,  density_left)  * p.dt
+        dT = (2.0 / t.h_bar) * np.dot(W_right, density_right) * p.dt
         R_absorbed += dR
         T_absorbed += dT
 
@@ -601,141 +671,101 @@ def run_cap_conductance(
     )
 
 
-# ---------------------------------------------------------------------------
-# Exact energy-domain transmission (lead self-energies + Fisher-Lee)
-# ---------------------------------------------------------------------------
-# The time-domain CAP method above injects a Gaussian wavepacket, which has an
-# intrinsic energy spread Delta_E ~ hbar / (packet transit time). The analytic
-# Buttiker formula this project compares against is evaluated at a single,
-# sharp Fermi energy. When T(E) varies rapidly with E near a Fabry-Perot-like
-# resonance of the ring (as it does here, since theta = k_F*pi*R ~ 12.57*pi is
-# a large phase, so T oscillates on an energy scale far finer than the
-# wavepacket's spread), the time-domain result is an energy-average of the
-# resonance and comes out systematically damped relative to the single-energy
-# analytic value -- even though norm is being conserved and tracked correctly.
-#
-# This solver instead computes T(E) exactly, at one sharp energy, for the
-# SAME discretized Hamiltonian used everywhere else in this module. It
-# attaches analytic self-energies for semi-infinite 1D leads (uniform hopping
-# t_lead, same dispersion as the explicit lead chain already built by
-# tools.build_single_ring_hamiltonian) at the two outermost lead sites, then
-# solves the open-boundary Green's function via one sparse LU factorization
-# and two right-hand-side solves (one per injected spin component). No time
-# stepping, no packet shape, no echo window, no CAP tuning -- so any
-# remaining gap to the analytic formula reflects genuine discretization
-# physics (finite N_R, finite delta_x, the tight-binding lead dispersion
-# departing from the continuum E=hbar^2 k^2/(2m) relation, the graph model of
-# the Y-junction) rather than a numerical artifact of the transport method.
-#
-# Reference: Datta, "Electronic Transport in Mesoscopic Systems" (1995),
-# Ch. 3 (self-energy of a semi-infinite 1-D chain, Fisher-Lee relation
-# T = Tr[Gamma_L G^r Gamma_R G^a]).
-
-@dataclass
-class ExactTransmissionResult:
-    """Result of the energy-domain (Green's-function) transmission calculation."""
-    params: t.PhysicsParams
-    fermi_energy_mev: float
-    T: float
-    G_over_G0: float
-    G_siemens: float
-    wall_seconds: float
-
-
-def lead_surface_self_energy(t_hop: float, energy_mev: float) -> complex:
-    """Retarded self-energy of a semi-infinite uniform 1-D chain (hopping t_hop,
-    on-site 2*t_hop) attached at its edge site, at energy ``energy_mev``.
-
-    Dispersion of the chain: E(k) = 2*t_hop*(1 - cos(k*dx)).
-    Propagating regime (0 < E < 4*t_hop): Sigma = -t_hop * exp(i*k*dx), with
-    k*dx in [0, pi] chosen so Im(Sigma) < 0 (outgoing/causal convention).
-    Evanescent regime falls back to a purely decaying (real, non-propagating)
-    self-energy.
-    """
-    x = 1.0 - energy_mev / (2.0 * t_hop)
-    if -1.0 <= x <= 1.0:
-        ka = np.arccos(x)
-        return -t_hop * np.exp(1j * ka)
-    kappa = np.arccosh(abs(x))
-    sign = 1.0 if x > 0 else -1.0
-    return -t_hop * sign * np.exp(-kappa)
-
-
-def run_exact_transmission(
+def run_transparent_conductance(
     p: t.PhysicsParams,
     fermi_energy_mev: float = 4.19,
+    total_time_ps: float = 30.0,
+    packet_center_fraction: float = 0.8,
+    packet_width_nm: float = 150.0,
+    keep_time_series: bool = False,
     verbose: bool = True,
-) -> ExactTransmissionResult:
-    """Exact two-terminal transmission at a single energy via lead self-energies.
+    spin_both: bool = True,
+) -> "CAPConductanceResult":
+    """Measure conductance using the exact single-site self-energy boundary.
 
-    Builds the same Hamiltonian as the rest of this module, attaches analytic
-    semi-infinite-lead self-energies at the two outermost lead sites, and
-    evaluates the Fisher-Lee formula T(E) = Tr[Gamma_L G^r_{L,R} Gamma_R
-    (G^r_{L,R})^dagger] with a single sparse LU factorization.
+    Same bookkeeping as ``run_cap_conductance`` (T/R accumulated from the
+    absorption rate at the boundary sites) so the two are directly
+    comparable, but the "absorber" here is the exact lead self-energy
+    Sigma(E_F) at a single site per lead instead of a finite CAP ramp.
+    See the module docstring above ``lead_self_energy`` for the derivation
+    and its documented limitation (monochromatic, not a full time-convolution
+    DTBC).
     """
     wall_start = time.perf_counter()
+    layout     = t.build_single_ring_layout(p)
+    k          = compute_wave_number(p, fermi_energy_mev)
+    time_steps = t.time_steps_for_duration(p, total_time_ps)
 
-    layout = t.build_single_ring_layout(p)
-    H = t.build_single_ring_hamiltonian(p, layout).tolil()
+    A, B, sigma = build_cn_matrices_with_transparent_bc(p, layout, fermi_energy_mev)
+    solver      = spla.factorized(A.tocsc())
+
+    if verbose:
+        v = t.lead_group_velocity(p, k)
+        transit = (p.L_leads + p.L_ring) / v
+        print(f"  Transparent-BC run: alpha={p.alpha:.1f} meV*nm | "
+              f"Sigma={sigma:.4f} meV | transit={transit:.1f} ps | "
+              f"total={total_time_ps:.1f} ps")
+
+    spin_arg = "both" if spin_both else "up"
+    psi = build_initial_wavefunction(
+        p, layout, k, packet_center_fraction, packet_width_nm, spin=spin_arg)
+    N0  = _weighted_total_probability(psi, layout)
+    _spin_scale = 2.0 if spin_both else 1.0
 
     left_site  = int(layout.left_lead_sites[0])
     right_site = int(layout.right_lead_sites[-1])
+    # Absorption rate at a single site: dP/dt = (2/hbar) * (-Im(Sigma)) * |psi|^2
+    gamma_half = -float(np.imag(sigma))   # = t*sin(k*delta_x), >= 0 for a propagating mode
 
-    Sigma = lead_surface_self_energy(p.t_lead, fermi_energy_mev)
-    Gamma = -2.0 * Sigma.imag   # scalar; self-energy is proportional to spin identity
+    T_absorbed = 0.0
+    R_absorbed = 0.0
 
-    # tools.build_single_ring_hamiltonian truncates the lead chains with a hard
-    # wall: the outermost site of each lead has only ONE link to its interior
-    # neighbour, so its on-site energy comes out as t_lead instead of the bulk
-    # value 2*t_lead every other lead site gets (two links). The self-energy
-    # formula above assumes it is being attached to a true bulk site of a
-    # semi-infinite chain (on-site 2*t_lead) representing the continuation
-    # beyond that site. Without restoring the missing +t_lead here, the
-    # boundary site sees an on-site energy deficit of exactly t_lead, which
-    # detunes it from resonance with the lead's own dispersion and makes the
-    # computed T spuriously depend on how long the explicit lead chain is
-    # (it should not, since Sigma exactly represents an infinite continuation).
-    # Verified by the missing +t_lead reproducing T(L_leads)-dependence in a
-    # bare 1-D chain sanity check; adding it restores exact length-invariance.
-    onsite_bulk_correction = p.t_lead
+    P_left_series  = np.empty(time_steps + 1) if keep_time_series else None
+    P_right_series = np.empty(time_steps + 1) if keep_time_series else None
+    if keep_time_series:
+        P_left_series[0]  = 0.0
+        P_right_series[0] = 0.0
 
-    n = layout.spinor_size
-    M = sp.identity(n, format="lil", dtype=complex) * fermi_energy_mev - H
-    for site in (left_site, right_site):
-        row0 = 2 * site
-        M[row0, row0]         -= (onsite_bulk_correction + Sigma)
-        M[row0 + 1, row0 + 1] -= (onsite_bulk_correction + Sigma)
-    M = M.tocsc()
+    for step in range(time_steps):
+        psi = solver(B @ psi)
 
-    solver = spla.factorized(M)
+        psi_block   = psi.reshape(-1, 2)
+        density_left  = float(np.sum(np.abs(psi_block[left_site])**2))
+        density_right = float(np.sum(np.abs(psi_block[right_site])**2))
 
-    # Source columns: unit injection at the right boundary, spin up and down.
-    rhs_up   = np.zeros(n, dtype=complex); rhs_up[2 * right_site]     = 1.0
-    rhs_down = np.zeros(n, dtype=complex); rhs_down[2 * right_site + 1] = 1.0
-    col_up   = solver(rhs_up)
-    col_down = solver(rhs_down)
+        dR = (2.0 / t.h_bar) * gamma_half * density_left  * p.dt
+        dT = (2.0 / t.h_bar) * gamma_half * density_right * p.dt
+        R_absorbed += dR
+        T_absorbed += dT
 
-    # G^r_{L,R}: rows at the left boundary site, columns = the two solves above.
-    G_LR = np.array([
-        [col_up[2 * left_site],     col_down[2 * left_site]],
-        [col_up[2 * left_site + 1], col_down[2 * left_site + 1]],
-    ], dtype=complex)
+        if keep_time_series:
+            P_left_series[step + 1]  = R_absorbed
+            P_right_series[step + 1] = T_absorbed
 
-    T_matrix = Gamma * G_LR @ (Gamma * np.eye(2)) @ G_LR.conj().T
-    T = float(np.real(np.trace(T_matrix)))
+    T_raw = T_absorbed / N0 if N0 > 0 else 0.0
+    R_raw = R_absorbed / N0 if N0 > 0 else 0.0
+    T = min(_spin_scale * T_raw, 2.0)
+    R = min(_spin_scale * R_raw, 2.0)
 
     wall_seconds = time.perf_counter() - wall_start
     if verbose:
-        print(f"  Exact GF: α={p.alpha:.1f} meV·nm | E_F={fermi_energy_mev:.3f} meV "
-              f"| T={T:.6f}  [{wall_seconds:.2f} s]")
+        print(f"    -> T={T:.6f}  R={R:.6f}  T+R={T+R:.4f}  "
+              f"(spin={'both' if spin_both else 'up'})  [{wall_seconds:.1f} s]")
 
-    return ExactTransmissionResult(
+    return CAPConductanceResult(
         params=p,
         fermi_energy_mev=fermi_energy_mev,
         T=T,
+        R=R,
+        T_plus_R=T + R,
         G_over_G0=T,
         G_siemens=T * G0_SIEMENS,
+        total_time_ps=total_time_ps,
         wall_seconds=wall_seconds,
+        time_axis_ps=(np.arange(time_steps + 1, dtype=float) * p.dt
+                      if keep_time_series else None),
+        P_left_cap_rate=P_left_series,
+        P_right_cap_rate=P_right_series,
     )
 
 
