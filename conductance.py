@@ -533,6 +533,15 @@ def run_cap_conductance(
     # CAP absorption strengths at those sites (spinor: repeat twice)
     W_left  = cap_vec[left_cap_sites]
     W_right = cap_vec[right_cap_sites]
+    # Trapezoidal quadrature weights (nm) at the same sites. N0 and every other
+    # probability integral in this module (_weighted_total_probability,
+    # _weighted_right_lead_probability) are computed as sum(|psi|^2 * weight_nm),
+    # so the absorption-rate integral below MUST use the same weights to stay
+    # unit-consistent with N0. Without them, T_absorbed/R_absorbed are missing
+    # a factor of delta_x (~5.25 nm here) relative to N0, which silently caps
+    # T+R far below its physical value of 1 instead of raising an error.
+    w_left_nm  = layout.integration_weights_nm[left_cap_sites]
+    w_right_nm = layout.integration_weights_nm[right_cap_sites]
 
     T_absorbed = 0.0   # cumulative transmitted probability
     R_absorbed = 0.0   # cumulative reflected probability
@@ -552,9 +561,10 @@ def run_cap_conductance(
         density_left  = np.sum(np.abs(psi_block[left_cap_sites])**2,  axis=1)
         density_right = np.sum(np.abs(psi_block[right_cap_sites])**2, axis=1)
 
-        # Integrate absorption over time step (factor 2/hbar from the imaginary term)
-        dR = (2.0 / t.h_bar) * np.dot(W_left,  density_left)  * p.dt
-        dT = (2.0 / t.h_bar) * np.dot(W_right, density_right) * p.dt
+        # Integrate absorption over time step (factor 2/hbar from the imaginary term).
+        # Weighted by w_*_nm for unit-consistency with N0 (see note above).
+        dR = (2.0 / t.h_bar) * np.dot(W_left  * w_left_nm,  density_left)  * p.dt
+        dT = (2.0 / t.h_bar) * np.dot(W_right * w_right_nm, density_right) * p.dt
         R_absorbed += dR
         T_absorbed += dT
 
