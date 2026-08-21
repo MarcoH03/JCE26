@@ -105,12 +105,12 @@ if __name__ == "__main__":
     print("\n=== Aharonov–Bohm sweep ===")
     base_clean = make_clean_ring_params()
     flux_sweep = np.linspace(0, 2.0, 21)   # 0 to 2 flux quanta
-    # ab_results = sweep_ab_conductance(base_clean, flux_sweep, total_time_ps=30.0, **cap_params)
-    # ab_T = [res.T for res in ab_results]
+    ab_results = sweep_ab_conductance(base_clean, flux_sweep, total_time_ps=30.0, **cap_params)
+    ab_T = [res.T for res in ab_results]
 
-    # plot_ab_oscillations(flux_sweep, ab_T, save_path="AB_oscillations.png")
-    # # Optionally save data
-    # np.savez_compressed("AB_sweep.npz", flux=flux_sweep, T=ab_T)
+    plot_ab_oscillations(flux_sweep, ab_T, save_path="AB_oscillations.png")
+    # Optionally save data
+    np.savez_compressed("AB_sweep.npz", flux=flux_sweep, T=ab_T)
 
     # -------------------- AC sweep --------------------
     print("\n=== Aharonov–Casher sweep ===")
@@ -120,11 +120,11 @@ if __name__ == "__main__":
     ac_results = sweep_ac_conductance(base_clean_flux0, alpha_sweep, total_time_ps=30.0, **cap_params)
     ac_T = [res.T for res in ac_results]
     
-    # Crear un objeto PhysicsParams base para obtener m y L_ring
-    p_base = make_clean_ring_params()
+    # # Crear un objeto PhysicsParams base para obtener m y L_ring
+    # p_base = make_clean_ring_params()
 
-    # Calcular fase AC para cada alpha
-    ac_phase_vals = alpha_to_ac_phase(alpha_sweep, p_base)
+    # # Calcular fase AC para cada alpha
+    # ac_phase_vals = alpha_to_ac_phase(alpha_sweep, p_base)
 
-    plot_ac_oscillations(ac_phase_vals, ac_T, save_path="AC_oscillations.png")
+    plot_ac_oscillations(alpha_sweep, ac_T, save_path="AC_oscillations.png")
     np.savez_compressed("AC_sweep.npz", alpha=alpha_sweep, T=ac_T)

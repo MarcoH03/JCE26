@@ -60,7 +60,7 @@ class PhysicsParams:
     alpha: float = 20.0   # Rashba strength, meV·nm
 
     # ---- potential model selector -------------------------------------------
-    potential_model: str = "none"
+    potential_model: str = "legacy_localized_qpc"
 
     # ---- legacy / localized QPC parameters ----------------------------------
     V0_L: float = 0.0
@@ -94,6 +94,13 @@ class PhysicsParams:
         "D": 120.0,
         "R": 120.0,
     })
+
+    # ---- junction coupling control ------------------------------------------
+    junction_correction: bool = True
+    # When True, a correction term (t_lead - 2*t_ring) is added to the on-site
+    # energy at each junction node, nulling the impedance mismatch between the
+    # lead chain and the two-arm ring. This makes T(Phi=0) = 1 achievable.
+    # Set to False to reproduce the old (mismatch) behaviour.
 
     # ---- reference energy (for barrier calibration only) --------------------
     potential_reference_energy_mev: float = 4.19
@@ -146,6 +153,30 @@ class PhysicsParams:
     @property
     def t_ring(self) -> float:
         return h_bar**2 / (2 * self.m * self.delta_s**2)
+
+    @property
+    def t_junction_correction(self) -> float:
+        """On-site energy correction at each junction to eliminate impedance mismatch.
+
+        The Y-junction node connects one lead chain (hopping t_lead) to two ring
+        arm chains (hopping t_ring each). The add_link routine accumulates on-site
+        energies as:
+            junction on-site = t_lead + 2 * t_ring
+
+        A bulk lead site has on-site = 2 * t_lead (matched to lead dispersion).
+        The mismatch creates a partial reflection every time the wavepacket hits
+        the junction, limiting T_max << 1.
+
+        Adding this correction at each junction node makes the junction transparent:
+            corrected on-site = (t_lead + 2*t_ring) + correction = 2*t_lead
+        =>  correction = t_lead - 2*t_ring
+
+        With the correction, T(Phi=0, alpha=0) = 1 and T(Phi=Phi_0/2) = 0,
+        giving full AB oscillation amplitude and G_max = 2*G_0.
+
+        Set junction_correction = False in PhysicsParams to disable this.
+        """
+        return self.t_lead - 2.0 * self.t_ring
 
     @property
     def qpc_max_height_mev(self) -> float:
@@ -625,6 +656,16 @@ def build_single_ring_hamiltonian(p: PhysicsParams, layout: SingleRingLayout) ->
         theta     = +p.phi_so_link          # sarm = +1 for lower arm
         spin_mat  = U_rashba(theta, phi_bar)
         add_link(sl, sr, p.t_ring, p.phi_D, spin_mat)
+
+    # ---- Junction impedance correction ------------------------------------
+    # Null the on-site mismatch at each Y-junction (see t_junction_correction).
+    if p.junction_correction:
+        corr = p.t_junction_correction
+        if not _is_close_to_zero(corr):
+            spin_identity = np.eye(2, dtype=complex)
+            for jsite in (layout.left_junction_site, layout.right_junction_site):
+                row_slice = _spin_slice(jsite)
+                hamiltonian[row_slice, row_slice] += corr * spin_identity
 
     return hamiltonian.tocsr()
 

@@ -230,18 +230,47 @@ def build_initial_wavefunction(
     k: float,
     packet_center_fraction: float = 0.8,
     packet_width_nm: float = 150.0,
+    spin: str = "up",
 ) -> np.ndarray:
-    """Gaussian wavepacket in the left lead moving towards the ring."""
+    """Gaussian wavepacket in the left lead moving towards the ring.
+
+    Parameters
+    ----------
+    spin : str
+        "up"   – inject spin-up only  (spinor [1, 0])
+        "down" – inject spin-down only (spinor [0, 1])
+        "both" – inject equal superposition [1/√2, 1/√2], so that both
+                 channels contribute and G/G₀ can reach 2.
+                 Equivalent to summing two independent runs.
+
+    Notes
+    -----
+    The Landauer conductance G/G₀ = T_up + T_down.  A spin-polarised packet
+    can only probe one channel (max G/G₀ = 1).  To measure the full
+    two-channel conductance without running the simulation twice, use
+    ``spin="both"`` and divide the resulting T by 0.5 (since both channels
+    contribute equally to the norm).  Alternatively, use
+    ``run_both_spin_channels`` which does the two runs explicitly and sums T.
+    """
     psi = np.zeros(layout.spinor_size, dtype=complex)
     left_positions_nm = np.arange(layout.left_lead_sites.size, dtype=float) * p.delta_x
     center_nm = packet_center_fraction * p.L_leads
     width_nm  = max(3.0 * p.delta_x, packet_width_nm)
 
+    if spin == "up":
+        chi = np.array([1.0, 0.0], dtype=complex)
+    elif spin == "down":
+        chi = np.array([0.0, 1.0], dtype=complex)
+    elif spin == "both":
+        chi = np.array([1.0, 1.0], dtype=complex) / np.sqrt(2.0)
+    else:
+        raise ValueError(f"spin must be 'up', 'down', or 'both', got {spin!r}")
+
     for site, x_nm in zip(layout.left_lead_sites, left_positions_nm):
         amp = (np.exp(-0.5 * ((x_nm - center_nm) / width_nm) ** 2)
                * np.exp(1j * k * x_nm))
-        psi[2 * site]     = amp
-        psi[2 * site + 1] = 0.0
+        psi[2 * site]     = amp * chi[0]
+        psi[2 * site + 1] = amp * chi[1]
 
     return psi
 
@@ -303,6 +332,7 @@ def run_single_conductance(
     packet_width_nm: float = 150.0,
     keep_time_series: bool = False,
     verbose: bool = True,
+    spin: str = "both",
 ) -> ConductanceResult:
     """Run the full Crank-Nicolson evolution and return a ConductanceResult.
 
@@ -311,20 +341,22 @@ def run_single_conductance(
     p:
         The complete parameter set for this run.
     fermi_energy_mev:
-        Injection energy.  Must match the value used to calibrate barrier heights
-        if potential_reference_energy_mev was set accordingly.
+        Injection energy.
     total_time_ps:
-        Physical duration of the simulation.  Should be long enough for the packet
-        to clear the ring but shorter than the first echo return.
+        Physical duration of the simulation.
     packet_center_fraction:
-        Where in the left lead the Gaussian packet starts (0 = junction, 1 = wall).
+        Where in the left lead the Gaussian packet starts (0=junction, 1=wall).
     packet_width_nm:
         Gaussian width of the initial packet.
     keep_time_series:
-        If True, the full P_R(t) and P_total(t) arrays are stored in the result
-        (useful for debugging one run; disable for large sweeps to save memory).
+        If True, the full P_R(t) and P_total(t) arrays are stored in the result.
     verbose:
         Print progress to stdout.
+    spin : str
+        Which spin channel(s) to inject: "up", "down", or "both" (default).
+        Using "both" injects an equal superposition and scales T by 2 so that
+        G/G₀ = T_up + T_down (can reach 2). For the single-channel Landauer
+        formula (one spin), use "up" or "down" (G/G₀ ≤ 1).
     """
     wall_start = time.perf_counter()
 
@@ -340,8 +372,12 @@ def run_single_conductance(
     A, B, _ = t.build_cn_matrices(p, layout)
     solver   = spla.factorized(A.tocsc())
 
-    psi = build_initial_wavefunction(p, layout, k, packet_center_fraction, packet_width_nm)
+    psi = build_initial_wavefunction(
+        p, layout, k, packet_center_fraction, packet_width_nm, spin=spin)
     N0  = _weighted_total_probability(psi, layout)
+    # When spin="both" we inject 2 channels at once. The resulting T measures
+    # the average of both channels. Multiply by 2 to get G/G₀ = T_up + T_down.
+    _spin_scale = 2.0 if spin == "both" else 1.0
 
     # --- time evolution with running P_R tracking ---------------------------
     P_R_max        = 0.0
@@ -374,15 +410,18 @@ def run_single_conductance(
     # Final total probability for norm-drift diagnostic
     P_total_final = _weighted_total_probability(psi, layout)
 
-    T         = P_R_max / N0 if N0 > 0 else 0.0
-    T         = min(T, 1.0)   # clamp numerical overshoot
+    # T_raw is the fraction of the injected probability that was transmitted.
+    # For spin="both": each spin contributes independently, so G/G₀ = 2 * T_raw.
+    T_raw     = P_R_max / N0 if N0 > 0 else 0.0
+    T         = min(_spin_scale * T_raw, 2.0)  # clamp to physical maximum
     G_over_G0 = T
     G_siemens = T * G0_SIEMENS
 
     wall_seconds = time.perf_counter() - wall_start
 
     if verbose:
-        print(f"    → T={T:.6f}  G/G₀={G_over_G0:.6f}  [{wall_seconds:.1f} s]")
+        print(f"    → T={T:.6f}  G/G₀={G_over_G0:.6f}  "
+              f"(spin={spin}, scale={_spin_scale})  [{wall_seconds:.1f} s]")
 
     return ConductanceResult(
         params=p,
@@ -437,6 +476,7 @@ def run_cap_conductance(
     cap_order: int = 3,
     keep_time_series: bool = False,
     verbose: bool = True,
+    spin_both: bool = True,
 ) -> "CAPConductanceResult":
     """Measure conductance using a Complex Absorbing Potential.
 
@@ -452,8 +492,8 @@ def run_cap_conductance(
     ----------
     total_time_ps : float
         Run duration.  Should be long enough for the packet to fully clear
-        the scattering region and be absorbed.  Typical: 2-3× the wavepacket
-        transit time = (L_leads + L_ring) / v_group.
+        the scattering region and be absorbed.  Typical: ~35 ps for the
+        InAs ring (packet transit ~5 ps + CAP absorption time).
     cap_fraction : float
         Fraction of each lead covered by the absorber (default 0.25).
     cap_strength : float
@@ -461,6 +501,10 @@ def run_cap_conductance(
         reflections; too large causes artificial back-reflection at the ramp onset.
     cap_order : int
         Ramp polynomial order (default 3).
+    spin_both : bool
+        If True (default), inject both spin channels equally and scale G by 2
+        so that G/G₀ = T_up + T_down ∈ [0, 2].
+        If False, inject spin-up only and G/G₀ = T_up ∈ [0, 1].
     """
     wall_start = time.perf_counter()
     layout     = t.build_single_ring_layout(p)
@@ -477,9 +521,11 @@ def run_cap_conductance(
     A, B    = build_cn_matrices_with_cap(p, layout, cap_vec)
     solver  = spla.factorized(A.tocsc())
 
+    spin_arg = "both" if spin_both else "up"
     psi = build_initial_wavefunction(
-        p, layout, k, packet_center_fraction, packet_width_nm)
+        p, layout, k, packet_center_fraction, packet_width_nm, spin=spin_arg)
     N0  = _weighted_total_probability(psi, layout)
+    _spin_scale = 2.0 if spin_both else 1.0
 
     # Identify CAP sites (W > 0)
     left_cap_sites  = layout.left_lead_sites[cap_vec[layout.left_lead_sites] > 0]
@@ -517,13 +563,16 @@ def run_cap_conductance(
             P_right_series[step + 1] = T_absorbed
 
     # Normalise by initial norm
-    T = T_absorbed / N0 if N0 > 0 else 0.0
-    R = R_absorbed / N0 if N0 > 0 else 0.0
-    T = min(T, 1.0)   # clamp numerical noise
+    T_raw = T_absorbed / N0 if N0 > 0 else 0.0
+    R_raw = R_absorbed / N0 if N0 > 0 else 0.0
+    # Scale by 2 when injecting both spins: G/G₀ = T_up + T_down = 2 * T_raw
+    T = min(_spin_scale * T_raw, 2.0)
+    R = min(_spin_scale * R_raw, 2.0)
 
     wall_seconds = time.perf_counter() - wall_start
     if verbose:
-        print(f"    → T={T:.6f}  R={R:.6f}  T+R={T+R:.4f}  [{wall_seconds:.1f} s]")
+        print(f"    → T={T:.6f}  R={R:.6f}  T+R={T+R:.4f}  "
+              f"(spin={'both' if spin_both else 'up'})  [{wall_seconds:.1f} s]")
 
     return CAPConductanceResult(
         params=p,
@@ -549,7 +598,6 @@ def sweep_conductance(
     base_params: t.PhysicsParams,
     sweep_parameter: str,
     sweep_values: list[float] | np.ndarray,
-    with_cap: bool = False,
     fermi_energy_mev: float = 4.19,
     total_time_ps: float = 13.5,
     packet_center_fraction: float = 0.8,
@@ -580,26 +628,15 @@ def sweep_conductance(
     for i, val in enumerate(sweep_values):
         print(f"[{i+1}/{len(sweep_values)}] {sweep_parameter}={val}")
         p_i = base_params.with_changes(**{sweep_parameter: val})
-        if with_cap:
-            cr = run_cap_conductance(
-                p_i,
-                fermi_energy_mev=fermi_energy_mev,
-                total_time_ps=total_time_ps,
-                packet_center_fraction=packet_center_fraction,
-                packet_width_nm=packet_width_nm,
-                keep_time_series=keep_time_series,
-                verbose=verbose,
-            )
-        else:
-            cr  = run_single_conductance(
-                p_i,
-                fermi_energy_mev=fermi_energy_mev,
-                total_time_ps=total_time_ps,
-                packet_center_fraction=packet_center_fraction,
-                packet_width_nm=packet_width_nm,
-                keep_time_series=keep_time_series,
-                verbose=verbose,
-            )
+        cr  = run_single_conductance(
+            p_i,
+            fermi_energy_mev=fermi_energy_mev,
+            total_time_ps=total_time_ps,
+            packet_center_fraction=packet_center_fraction,
+            packet_width_nm=packet_width_nm,
+            keep_time_series=keep_time_series,
+            verbose=verbose,
+        )
         result.results.append(cr)
 
     return result
@@ -747,9 +784,8 @@ if __name__ == "__main__":
         base_params=base,
         sweep_parameter="alpha",
         sweep_values=alpha_values,
-        with_cap=True,
         fermi_energy_mev=4.19,
-        total_time_ps=30.0,
+        total_time_ps=13.5,
         verbose=True,
     )
     plot_sweep_conductance(
