@@ -1,0 +1,296 @@
+{
+  "tolerance_pct": 1.0,
+  "fermi_energy_mev": 4.19,
+  "n_points": 10,
+  "n_passed": 2,
+  "points": [
+    {
+      "Phi": -1.0,
+      "alpha": 0.0,
+      "final_passed": false,
+      "G_kirchhoff_ring": 1.2763705168050985,
+      "attempts": [
+        {
+          "method": "exact_gf_democratic",
+          "G_numeric": 1.2763705168051869,
+          "G_analytical_legacy": 1.6695940294899125,
+          "rel_error_pct": 23.552043535089886,
+          "passed": false,
+          "wall_seconds": 0.0620583219999844
+        },
+        {
+          "method": "exact_gf_corrected",
+          "G_numeric": 0.12559615080235081,
+          "G_analytical_legacy": 1.6695940294899125,
+          "rel_error_pct": 92.47744370284299,
+          "passed": false,
+          "wall_seconds": 0.09296566699981668
+        },
+        {
+          "method": "cap_wavepacket",
+          "G_numeric": 0.4131161034792796,
+          "G_analytical_legacy": 1.6695940294899125,
+          "rel_error_pct": 75.25649372347762,
+          "passed": false,
+          "wall_seconds": 2.129118743999925
+        }
+      ]
+    },
+    {
+      "Phi": -0.5,
+      "alpha": 0.0,
+      "final_passed": true,
+      "G_kirchhoff_ring": 5.499351859154176e-29,
+      "attempts": [
+        {
+          "method": "exact_gf_democratic",
+          "G_numeric": 4.777876005218641e-30,
+          "G_analytical_legacy": 1.624389403539759e-32,
+          "rel_error_pct": 4.761632111183243e-19,
+          "passed": true,
+          "wall_seconds": 0.059098106999954325
+        }
+      ]
+    },
+    {
+      "Phi": 0.0,
+      "alpha": 0.0,
+      "final_passed": false,
+      "G_kirchhoff_ring": 1.276370516805098,
+      "attempts": [
+        {
+          "method": "exact_gf_democratic",
+          "G_numeric": 1.276370516805163,
+          "G_analytical_legacy": 1.6695940294899125,
+          "rel_error_pct": 23.55204353509132,
+          "passed": false,
+          "wall_seconds": 0.059559230000104435
+        },
+        {
+          "method": "exact_gf_corrected",
+          "G_numeric": 0.12559615080235548,
+          "G_analytical_legacy": 1.6695940294899125,
+          "rel_error_pct": 92.4774437028427,
+          "passed": false,
+          "wall_seconds": 0.06194578600002387
+        },
+        {
+          "method": "cap_wavepacket",
+          "G_numeric": 0.4131161034792745,
+          "G_analytical_legacy": 1.6695940294899125,
+          "rel_error_pct": 75.25649372347792,
+          "passed": false,
+          "wall_seconds": 2.2124851460000627
+        }
+      ]
+    },
+    {
+      "Phi": 0.5,
+      "alpha": 0.0,
+      "final_passed": true,
+      "G_kirchhoff_ring": 5.638018072191581e-29,
+      "attempts": [
+        {
+          "method": "exact_gf_democratic",
+          "G_numeric": 7.741038907321937e-29,
+          "G_analytical_legacy": 1.624389403539759e-32,
+          "rel_error_pct": 7.739414517918397e-18,
+          "passed": true,
+          "wall_seconds": 0.05955899699984002
+        }
+      ]
+    },
+    {
+      "Phi": 1.0,
+      "alpha": 0.0,
+      "final_passed": false,
+      "G_kirchhoff_ring": 1.2763705168050985,
+      "attempts": [
+        {
+          "method": "exact_gf_democratic",
+          "G_numeric": 1.27637051680518,
+          "G_analytical_legacy": 1.6695940294899125,
+          "rel_error_pct": 23.5520435350903,
+          "passed": false,
+          "wall_seconds": 0.060354935999839654
+        },
+        {
+          "method": "exact_gf_corrected",
+          "G_numeric": 0.12559615080235073,
+          "G_analytical_legacy": 1.6695940294899125,
+          "rel_error_pct": 92.477443702843,
+          "passed": false,
+          "wall_seconds": 0.0942074170000069
+        },
+        {
+          "method": "cap_wavepacket",
+          "G_numeric": 0.4131161034792818,
+          "G_analytical_legacy": 1.6695940294899125,
+          "rel_error_pct": 75.25649372347748,
+          "passed": false,
+          "wall_seconds": 2.106029140999908
+        }
+      ]
+    },
+    {
+      "Phi": -1.0,
+      "alpha": 20.0,
+      "final_passed": false,
+      "G_kirchhoff_ring": null,
+      "attempts": [
+        {
+          "method": "exact_gf_democratic",
+          "G_numeric": 1.3451883703951015,
+          "G_analytical_legacy": 0.0036097004210145795,
+          "rel_error_pct": 37165.92829044271,
+          "passed": false,
+          "wall_seconds": 0.06800395799996295
+        },
+        {
+          "method": "exact_gf_corrected",
+          "G_numeric": 0.11185421825660137,
+          "G_analytical_legacy": 0.0036097004210145795,
+          "rel_error_pct": 2998.7119486542456,
+          "passed": false,
+          "wall_seconds": 0.07082752199994502
+        },
+        {
+          "method": "cap_wavepacket",
+          "G_numeric": 0.4027602139613466,
+          "G_analytical_legacy": 0.0036097004210145795,
+          "rel_error_pct": 11057.718563474104,
+          "passed": false,
+          "wall_seconds": 3.7746075200000178
+        }
+      ]
+    },
+    {
+      "Phi": -0.5,
+      "alpha": 20.0,
+      "final_passed": false,
+      "G_kirchhoff_ring": null,
+      "attempts": [
+        {
+          "method": "exact_gf_democratic",
+          "G_numeric": 1.1784556569833917,
+          "G_analytical_legacy": 1.669363605887705,
+          "rel_error_pct": 29.406891774381705,
+          "passed": false,
+          "wall_seconds": 0.10523795900007826
+        },
+        {
+          "method": "exact_gf_corrected",
+          "G_numeric": 0.006576624271494376,
+          "G_analytical_legacy": 1.669363605887705,
+          "rel_error_pct": 99.60604003535843,
+          "passed": false,
+          "wall_seconds": 0.07077919600010318
+        },
+        {
+          "method": "cap_wavepacket",
+          "G_numeric": 0.1585615460071469,
+          "G_analytical_legacy": 1.669363605887705,
+          "rel_error_pct": 90.50167707934249,
+          "passed": false,
+          "wall_seconds": 3.8452640440000323
+        }
+      ]
+    },
+    {
+      "Phi": 0.0,
+      "alpha": 20.0,
+      "final_passed": false,
+      "G_kirchhoff_ring": null,
+      "attempts": [
+        {
+          "method": "exact_gf_democratic",
+          "G_numeric": 1.3451883703950984,
+          "G_analytical_legacy": 0.0036097004210145518,
+          "rel_error_pct": 37165.928290442906,
+          "passed": false,
+          "wall_seconds": 0.1050563209998927
+        },
+        {
+          "method": "exact_gf_corrected",
+          "G_numeric": 0.11185421825661326,
+          "G_analytical_legacy": 0.0036097004210145518,
+          "rel_error_pct": 2998.7119486545985,
+          "passed": false,
+          "wall_seconds": 0.06880039200018473
+        },
+        {
+          "method": "cap_wavepacket",
+          "G_numeric": 0.40276021396134015,
+          "G_analytical_legacy": 0.0036097004210145518,
+          "rel_error_pct": 11057.71856347401,
+          "passed": false,
+          "wall_seconds": 3.595467812999914
+        }
+      ]
+    },
+    {
+      "Phi": 0.5,
+      "alpha": 20.0,
+      "final_passed": false,
+      "G_kirchhoff_ring": null,
+      "attempts": [
+        {
+          "method": "exact_gf_democratic",
+          "G_numeric": 1.1784556569834166,
+          "G_analytical_legacy": 1.669363605887705,
+          "rel_error_pct": 29.406891774380213,
+          "passed": false,
+          "wall_seconds": 0.06906036200007293
+        },
+        {
+          "method": "exact_gf_corrected",
+          "G_numeric": 0.006576624271494446,
+          "G_analytical_legacy": 1.669363605887705,
+          "rel_error_pct": 99.60604003535843,
+          "passed": false,
+          "wall_seconds": 0.0689439279999533
+        },
+        {
+          "method": "cap_wavepacket",
+          "G_numeric": 0.15856154600714473,
+          "G_analytical_legacy": 1.669363605887705,
+          "rel_error_pct": 90.5016770793426,
+          "passed": false,
+          "wall_seconds": 3.5521106749999944
+        }
+      ]
+    },
+    {
+      "Phi": 1.0,
+      "alpha": 20.0,
+      "final_passed": false,
+      "G_kirchhoff_ring": null,
+      "attempts": [
+        {
+          "method": "exact_gf_democratic",
+          "G_numeric": 1.3451883703951042,
+          "G_analytical_legacy": 0.0036097004210145795,
+          "rel_error_pct": 37165.92829044278,
+          "passed": false,
+          "wall_seconds": 0.06701321699983964
+        },
+        {
+          "method": "exact_gf_corrected",
+          "G_numeric": 0.1118542182566005,
+          "G_analytical_legacy": 0.0036097004210145795,
+          "rel_error_pct": 2998.711948654221,
+          "passed": false,
+          "wall_seconds": 0.10154378900006122
+        },
+        {
+          "method": "cap_wavepacket",
+          "G_numeric": 0.40276021396134654,
+          "G_analytical_legacy": 0.0036097004210145795,
+          "rel_error_pct": 11057.718563474102,
+          "passed": false,
+          "wall_seconds": 3.735683941000161
+        }
+      ]
+    }
+  ]
+}
