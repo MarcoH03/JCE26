@@ -155,8 +155,17 @@ def analytical_G(Phi: float, alpha_mev_nm: float) -> float:
 def transparent_ring_params(
     Phi: float = 0.0,
     alpha: float = ALPHA_REF,
+    junction_correction: bool = True,
 ) -> t.PhysicsParams:
-    """Return PhysicsParams for a ring with V=0 everywhere."""
+    """Return PhysicsParams for a ring with V=0 everywhere.
+
+    junction_correction defaults to True to match tools.default_params() and
+    every existing plot in this module (unchanged behaviour). See
+    README_QTBM.md / INFORME_2026-08-22_DTBC_QTBM_resonancias.md: this term
+    is suspected miscalibrated (it suppresses T by >100x at the reference
+    point regardless of boundary condition) -- pass junction_correction=False
+    to see the boundary-condition comparison without that confound.
+    """
     return t.PhysicsParams(
         m_factor=M_FACTOR,
         R=R_NM,
@@ -168,6 +177,7 @@ def transparent_ring_params(
         alpha=alpha,
         potential_model="none",   # V = 0 everywhere
         gaussian_qpc_heights_mev={"L": 0.0, "U": 0.0, "D": 0.0, "R": 0.0},
+        junction_correction=junction_correction,
     )
 
 
@@ -176,7 +186,8 @@ def transparent_ring_params(
 # ---------------------------------------------------------------------------
 
 def simulate_G(Phi: float, alpha: float, verbose: bool = False,
-               boundary: str = "cap", total_time_ps: float = 35.0) -> float:
+               boundary: str = "cap", total_time_ps: float = 35.0,
+               junction_correction: bool = True) -> float:
     """Return numerical G/G₀ using an open-boundary lead absorber.
 
     boundary="cap" (default, unchanged behaviour): Complex Absorbing
@@ -207,8 +218,8 @@ def simulate_G(Phi: float, alpha: float, verbose: bool = False,
       4. Any reflected amplitude returns and is absorbed by the left CAP
     The CAP turns off hard-wall echoes so the run can be as long as needed.
     """
-    from conductance import run_cap_conductance, run_transparent_conductance
-    p = transparent_ring_params(Phi=Phi, alpha=alpha)
+    from conductance import run_cap_conductance, run_transparent_conductance, run_dtbc_conductance
+    p = transparent_ring_params(Phi=Phi, alpha=alpha, junction_correction=junction_correction)
     if boundary == "cap":
         result = run_cap_conductance(
             p,
@@ -224,6 +235,23 @@ def simulate_G(Phi: float, alpha: float, verbose: bool = False,
         )
     elif boundary == "transparent":
         result = run_transparent_conductance(
+            p,
+            fermi_energy_mev=E_F_MEV,
+            total_time_ps=total_time_ps,
+            packet_center_fraction=0.8,
+            packet_width_nm=150.0,
+            spin_both=True,
+            verbose=verbose,
+        )
+    elif boundary == "dtbc":
+        # Exact discrete transparent boundary condition (Akramov et al. 2026,
+        # see dtbc.py). No finite absorbing region and no residual reflection
+        # from an approximate ramp/monochromatic self-energy -- exact for the
+        # WHOLE wavepacket. Cost is O(total_time_ps^2) (a genuine memory
+        # convolution), so this is noticeably slower per point than "cap" or
+        # "transparent" -- keep total_time_ps only as long as needed for T+R
+        # to converge (see INFORME_2026-08-22_DTBC_QTBM_resonancias.md).
+        result = run_dtbc_conductance(
             p,
             fermi_energy_mev=E_F_MEV,
             total_time_ps=total_time_ps,
@@ -354,6 +382,125 @@ def plot_ac_oscillations(n_points: int = 40) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Plot 1b / 2b — boundary-condition comparison: CAP (old) vs DTBC (new)
+# ---------------------------------------------------------------------------
+# These overlay the CURRENT default (CAP) against the new exact DTBC
+# (dtbc.py, corroborated against Akramov et al. 2026) and the analytical
+# formula, at a fixed total_time_ps for both so the comparison is apples to
+# apples. DTBC costs O(total_time_ps^2) per point (a real memory
+# convolution -- see conductance.run_dtbc_conductance), so these use fewer
+# points than the full-resolution plot_ab_oscillations/plot_ac_oscillations
+# by default; raise n_points if you have the time budget for it.
+
+def plot_ab_oscillations_compare_boundaries(
+    n_points: int = 15,
+    alpha: float = ALPHA_REF,
+    total_time_ps: float = 70.0,
+    boundaries: tuple[str, ...] = ("cap", "dtbc"),
+    junction_correction: bool = True,
+) -> None:
+    """G/G₀ vs Φ/Φ₀ at fixed α, CAP (old) vs DTBC (new) vs analytical."""
+    Phi_values = np.linspace(-1.0, 1.0, n_points)
+    labels = {"cap": "CAP (viejo)", "transparent": "Autoenergía monocromática",
+              "dtbc": "DTBC exacto (nuevo)"}
+    colors = {"cap": "tab:red", "transparent": "tab:purple", "dtbc": "tab:blue"}
+
+    G_analytical = np.array([analytical_G(Phi, alpha) for Phi in Phi_values])
+    G_by_boundary: dict[str, np.ndarray] = {}
+    for boundary in boundaries:
+        print(f"\n[AB compare] boundary={boundary} (junction_correction={junction_correction}): "
+              f"simulating {n_points} points at total_time_ps={total_time_ps} ...")
+        G_by_boundary[boundary] = np.array([
+            simulate_G(Phi, alpha, boundary=boundary, total_time_ps=total_time_ps,
+                      junction_correction=junction_correction)
+            for Phi in Phi_values
+        ])
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(Phi_values, G_analytical, "k--", linewidth=1.8, label="Analítico (Büttiker)")
+    for boundary in boundaries:
+        ax.plot(Phi_values, G_by_boundary[boundary], "o-",
+                color=colors.get(boundary, "tab:gray"), markersize=4, linewidth=1.4,
+                label=labels.get(boundary, boundary))
+    ax.set_xlabel(r"$\Phi / \Phi_0$")
+    ax.set_ylabel(r"$G/G_0$")
+    ax.set_ylim(-0.05, 2.1)
+    ax.axhline(2.0, color="green", linestyle=":", alpha=0.4, linewidth=0.9)
+    ax.axhline(0.0, color="red",   linestyle=":", alpha=0.4, linewidth=0.9)
+    ax.grid(True, alpha=0.25)
+    ax.legend(fontsize=9)
+    jc_tag = "junction_correction=True (default repo)" if junction_correction else "junction_correction=False"
+    ax.set_title(f"Oscilaciones AB: CAP vs DTBC vs analítico "
+                 f"(α={alpha:.1f} meV·nm, total_time_ps={total_time_ps:.0f}, {jc_tag})", fontsize=10)
+    fig.tight_layout()
+
+    suffix = "_jcTrue" if junction_correction else "_jcFalse"
+    np.savez_compressed(OUTPUT_DIR / f"ab_oscillations_compare_boundaries{suffix}.npz",
+                        Phi=Phi_values, alpha=alpha, total_time_ps=total_time_ps,
+                        junction_correction=junction_correction, G_analytical=G_analytical,
+                        **{f"G_{b}": G_by_boundary[b] for b in boundaries})
+    path = OUTPUT_DIR / f"ab_oscillations_compare_boundaries{suffix}.png"
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    print(f"Saved: {path}")
+
+
+def plot_ac_oscillations_compare_boundaries(
+    n_points: int = 15,
+    Phi: float = 0.0,
+    total_time_ps: float = 70.0,
+    boundaries: tuple[str, ...] = ("cap", "dtbc"),
+    junction_correction: bool = True,
+) -> None:
+    """G/G₀ vs φ_so at fixed Φ, CAP (old) vs DTBC (new) vs analytical."""
+    phi_so_values = np.linspace(0.0, 2.0, n_points)
+    alpha_values = phi_so_values * h_bar**2 / (m * R_NM)
+    labels = {"cap": "CAP (viejo)", "transparent": "Autoenergía monocromática",
+              "dtbc": "DTBC exacto (nuevo)"}
+    colors = {"cap": "tab:red", "transparent": "tab:purple", "dtbc": "tab:blue"}
+
+    G_analytical = np.array([analytical_G(Phi, a) for a in alpha_values])
+    G_by_boundary: dict[str, np.ndarray] = {}
+    for boundary in boundaries:
+        print(f"\n[AC compare] boundary={boundary} (junction_correction={junction_correction}): "
+              f"simulating {n_points} points at total_time_ps={total_time_ps} ...")
+        G_by_boundary[boundary] = np.array([
+            simulate_G(Phi, a, boundary=boundary, total_time_ps=total_time_ps,
+                      junction_correction=junction_correction)
+            for a in alpha_values
+        ])
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(phi_so_values, G_analytical, "k--", linewidth=1.8, label="Analítico (Büttiker)")
+    for boundary in boundaries:
+        ax.plot(phi_so_values, G_by_boundary[boundary], "o-",
+                color=colors.get(boundary, "tab:gray"), markersize=4, linewidth=1.4,
+                label=labels.get(boundary, boundary))
+    ax.set_xlabel(r"$\phi_{so} = k_{so} \cdot R$")
+    ax.set_ylabel(r"$G/G_0$")
+    ax.set_ylim(-0.05, 2.1)
+    ax.axhline(2.0, color="green", linestyle=":", alpha=0.4, linewidth=0.9)
+    ax.axhline(0.0, color="red",   linestyle=":", alpha=0.4, linewidth=0.9)
+    ax.grid(True, alpha=0.25)
+    ax.legend(fontsize=9)
+    jc_tag = "junction_correction=True (default repo)" if junction_correction else "junction_correction=False"
+    ax.set_title(f"Oscilaciones AC: CAP vs DTBC vs analítico "
+                 f"(Φ={Phi:.2f}, total_time_ps={total_time_ps:.0f}, {jc_tag})", fontsize=10)
+    fig.tight_layout()
+
+    suffix = "_jcTrue" if junction_correction else "_jcFalse"
+    np.savez_compressed(OUTPUT_DIR / f"ac_oscillations_compare_boundaries{suffix}.npz",
+                        phi_so=phi_so_values, alpha=alpha_values, Phi=Phi,
+                        total_time_ps=total_time_ps, junction_correction=junction_correction,
+                        G_analytical=G_analytical,
+                        **{f"G_{b}": G_by_boundary[b] for b in boundaries})
+    path = OUTPUT_DIR / f"ac_oscillations_compare_boundaries{suffix}.png"
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    print(f"Saved: {path}")
+
+
+# ---------------------------------------------------------------------------
 # Plot 3 — 2D map: G vs (Φ, φ_so) — the full AB+AC landscape
 # ---------------------------------------------------------------------------
 
@@ -468,31 +615,47 @@ if __name__ == "__main__":
         epilog="""
 Plots produced
 --------------
-  ab    G vs Φ at fixed α   (AB oscillations)
-  ac    G vs φ_so at fixed Φ (AC oscillations)
-  map   2-D G(Φ, φ_so) landscape
+  ab         G vs Φ at fixed α   (AB oscillations, CAP only, as before)
+  ac         G vs φ_so at fixed Φ (AC oscillations, CAP only, as before)
+  map        2-D G(Φ, φ_so) landscape (CAP only, as before)
+  ab-compare G vs Φ: CAP (old) vs DTBC (new) vs analítico, overlaid
+  ac-compare G vs φ_so: CAP (old) vs DTBC (new) vs analítico, overlaid
 
 Examples
 --------
-  python ab_ac_proof.py                    # all plots, 40-point lines
-  python ab_ac_proof.py --quick            # 10 points each (fast test)
-  python ab_ac_proof.py --plots ab ac      # only 1-D plots
-  python ab_ac_proof.py --n-line 60 --n-map 15  # custom resolution
+  python ab_ac_proof.py                             # all CAP-only plots, 40-point lines
+  python ab_ac_proof.py --quick                      # 10 points each (fast test)
+  python ab_ac_proof.py --plots ab-compare ac-compare  # CAP vs DTBC comparison plots
+  python ab_ac_proof.py --plots ab-compare --n-compare 21 --compare-time-ps 100
+  python ab_ac_proof.py --n-line 60 --n-map 15       # custom resolution
         """
     )
     parser.add_argument("--plots", nargs="+", default=["ab", "ac", "map"],
-                        choices=["ab", "ac", "map"])
+                        choices=["ab", "ac", "map", "ab-compare", "ac-compare"])
     parser.add_argument("--n-line", type=int, default=40,
                         help="Points for 1-D line plots (default 40)")
     parser.add_argument("--n-map", type=int, default=15,
                         help="Points per axis for 2-D map (default 15, total n²)")
+    parser.add_argument("--n-compare", type=int, default=15,
+                        help="Points for the CAP-vs-DTBC comparison plots (default 15; "
+                             "DTBC is O(total_time_ps^2) per point, keep this modest)")
+    parser.add_argument("--compare-time-ps", type=float, default=70.0,
+                        help="total_time_ps used for BOTH boundaries in the comparison "
+                             "plots (default 70)")
+    parser.add_argument("--no-junction-correction", action="store_true",
+                        help="Use junction_correction=False in the *-compare plots "
+                             "(default: True, matching the rest of this repo). See "
+                             "INFORME_2026-08-22_DTBC_QTBM_resonancias.md -- junction_correction "
+                             "as currently derived suppresses T by >100x regardless of "
+                             "boundary condition, which can swamp the CAP-vs-DTBC comparison.")
     parser.add_argument("--quick", action="store_true",
-                        help="Set n-line=8, n-map=6 for a fast test run")
+                        help="Set n-line=8, n-map=6, n-compare=6 for a fast test run")
     args = parser.parse_args()
 
     if args.quick:
         args.n_line = 8
         args.n_map  = 6
+        args.n_compare = 6
 
     print_diagnostics()
     wall_t0 = time.perf_counter()
@@ -500,6 +663,13 @@ Examples
     if "ab"  in args.plots: plot_ab_oscillations(args.n_line)
     if "ac"  in args.plots: plot_ac_oscillations(args.n_line)
     if "map" in args.plots: plot_ab_ac_map(args.n_map, args.n_map)
+    jc = not args.no_junction_correction
+    if "ab-compare" in args.plots:
+        plot_ab_oscillations_compare_boundaries(args.n_compare, total_time_ps=args.compare_time_ps,
+                                                junction_correction=jc)
+    if "ac-compare" in args.plots:
+        plot_ac_oscillations_compare_boundaries(args.n_compare, total_time_ps=args.compare_time_ps,
+                                                junction_correction=jc)
 
     print(f"\nDone in {time.perf_counter()-wall_t0:.1f} s.")
     print(f"Outputs saved to: {OUTPUT_DIR.resolve()}")

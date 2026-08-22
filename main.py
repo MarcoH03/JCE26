@@ -361,8 +361,24 @@ def animate_density_history(density_history, section_labels,
 # Main
 # ---------------------------------------------------------------------------
 
-def main() -> None:
-    """Execute the simulation, archive the run and print the key diagnostics."""
+def main(boundary: str = "none") -> None:
+    """Execute the simulation, archive the run and print the key diagnostics.
+
+    Parameters
+    ----------
+    boundary : str
+        "none" (default, UNCHANGED behaviour): plain Crank-Nicolson on the
+        truncated lattice, i.e. implicit hard-wall reflection at both lead
+        ends -- this is what main.py has always done.
+        "dtbc": the exact discrete transparent boundary condition (Akramov
+        et al. 2026, arXiv:2608.05338; see dtbc.py for the derivation and
+        dtbc_selftest.py for its corroboration against the paper's own
+        Fig. 2/3). No hard-wall echoes, no finite absorbing region -- the
+        leads behave as if truly infinite. Cost is O(time_steps^2) (a
+        genuine non-Markovian memory convolution), noticeably slower than
+        "none" for long runs, but for TOTAL_TIME_PS in the tens of ps this
+        is still fast (a few seconds).
+    """
 
     # --- Build the parameter set for this run --------------------------------
     # Change any field here; all downstream calls use p explicitly.
@@ -384,12 +400,22 @@ def main() -> None:
     print(f"k = {k:.4f} nm^-1")
     print(f"v_group = {lead_velocity_nm_ps:.2f} nm/ps")
     print(f"potential_model = {p.potential_model}")
+    print(f"boundary = {boundary}")
 
-    A, B, size = t.build_cn_matrices(p, layout)
-    hamiltonian = t.build_single_ring_hamiltonian(p, layout)
-
+    hamiltonian = t.build_single_ring_hamiltonian(p, layout)  # physical H, unmodified either way
     psi_initial = build_initial_wavefunction(p, layout, k)
-    psi_history = propagate_wavefunction(A, B, psi_initial, time_steps)
+
+    if boundary == "none":
+        A, B, size = t.build_cn_matrices(p, layout)
+        psi_history = propagate_wavefunction(A, B, psi_initial, time_steps)
+    elif boundary == "dtbc":
+        import dtbc as d
+        A, B, _boundary_sites, _tau_c, _K0 = d.build_dtbc_matrices(p, layout)
+        size = layout.spinor_size
+        dtbc_result = d.run_dtbc_propagation(p, psi_initial, time_steps, keep_history=True)
+        psi_history = dtbc_result["psi_history"]
+    else:
+        raise ValueError(f"Unknown boundary {boundary!r} (expected 'none' or 'dtbc')")
 
     site_density_history      = build_site_density_history(psi_history, layout.unique_site_count)
     plot_density_history      = build_plot_density_history(site_density_history, layout)
@@ -446,6 +472,7 @@ def main() -> None:
         "lead_group_velocity_nm_ps": float(lead_velocity_nm_ps),
         "total_time_ps":           TOTAL_TIME_PS,
         "time_steps":              time_steps,
+        "boundary_condition":      boundary,
     })
 
     matrix_summary = {
@@ -592,5 +619,107 @@ def main() -> None:
         plt.show()
 
 
+def compare_boundaries(save_path: str = "boundary_comparison.png") -> None:
+    """Run the SAME single-shot simulation once with boundary="none" (the
+    old hard-wall-truncated leads) and once with boundary="dtbc" (the new
+    exact transparent boundary), and overlay the results directly -- for a
+    quick visual "old vs new" comparison without digging through two
+    separate RESULTADOS/ run directories.
+
+    Produces a 2x2 figure: top row is the density profile at the final
+    simulated time for each boundary (note how "none" still shows a fully
+    reflected packet trapped in the leads, while "dtbc" shows genuine
+    transmission/absorption at the lead ends); bottom row is the discrete
+    probability history P(t)/P(0) for both, overlaid on one axis (for
+    "none" this stays at 1.0 by construction -- nothing can leave a
+    hard-walled box; for "dtbc" it decays as probability genuinely exits).
+    """
+    p      = t.default_params()
+    layout = t.build_single_ring_layout(p)
+    k      = compute_wave_number(p, FERMI_ENERGY_MEV)
+    time_steps = t.time_steps_for_duration(p, TOTAL_TIME_PS)
+    time_axis_ps = np.arange(time_steps + 1, dtype=float) * p.dt
+    psi_initial  = build_initial_wavefunction(p, layout, k)
+
+    node_indices, potential_profile, section_labels = t.build_potential_profile(p, layout)
+
+    results = {}
+    for boundary in ("none", "dtbc"):
+        print(f"[compare_boundaries] running boundary={boundary} ...")
+        if boundary == "none":
+            A, B, _size = t.build_cn_matrices(p, layout)
+            psi_history = propagate_wavefunction(A, B, psi_initial, time_steps)
+        else:
+            import dtbc as d
+            dtbc_result = d.run_dtbc_propagation(p, psi_initial, time_steps, keep_history=True)
+            psi_history = dtbc_result["psi_history"]
+
+        site_density_history = build_site_density_history(psi_history, layout.unique_site_count)
+        plot_density_history = build_plot_density_history(site_density_history, layout)
+        probability_history  = build_probability_history(site_density_history)
+        results[boundary] = {
+            "plot_density_history": plot_density_history,
+            "relative_probability_history": probability_history / probability_history[0],
+        }
+
+    fig, axes = plt.subplots(2, 2, figsize=(13, 9))
+    node_x = np.arange(results["none"]["plot_density_history"].shape[1])
+
+    for col, boundary in enumerate(("none", "dtbc")):
+        ax = axes[0, col]
+        density_final = results[boundary]["plot_density_history"][-1]
+        ax.plot(node_x, density_final, color="tab:blue", linewidth=1.2)
+        ax.set_title(f"boundary={boundary}  |  densidad en t={TOTAL_TIME_PS} ps", fontsize=10)
+        ax.set_xlabel("Nodo linealizado L -> U -> D -> R")
+        ax.set_ylabel(r"$|\psi|^2$")
+        add_section_guides(ax, section_labels)
+        ax.grid(True, alpha=0.25)
+
+    ax = axes[1, 0]
+    ax.plot(time_axis_ps, results["none"]["relative_probability_history"],
+            color="tab:red", linewidth=1.4, label="boundary=none (viejo, pared dura)")
+    ax.plot(time_axis_ps, results["dtbc"]["relative_probability_history"],
+            color="tab:blue", linewidth=1.4, label="boundary=dtbc (nuevo, exacto)")
+    ax.axhline(1.0, color="black", linestyle="--", linewidth=0.8, alpha=0.6)
+    ax.set_xlabel("Tiempo (ps)")
+    ax.set_ylabel(r"$P(t)/P(0)$")
+    ax.set_title("Probabilidad remanente en el dominio finito", fontsize=10)
+    ax.grid(True, alpha=0.25)
+    ax.legend(fontsize=9)
+
+    axes[1, 1].axis("off")
+    axes[1, 1].text(0.02, 0.95,
+        "boundary=none: nada puede salir del dominio\n"
+        "(pared dura implícita en ambos extremos) -- \n"
+        "P(t)/P(0) = 1 siempre, por construcción.\n\n"
+        "boundary=dtbc: los leads se comportan como si\n"
+        "fueran realmente infinitos -- P(t)/P(0) decae a\n"
+        "medida que la probabilidad realmente escapa,\n"
+        "sin reflexión espuria en el truncamiento.\n\n"
+        "Ver dtbc.py / dtbc_selftest.py para la derivación\n"
+        "y la corroboración contra Akramov et al. 2026.",
+        transform=axes[1, 1].transAxes, va="top", ha="left", fontsize=9.5, family="monospace")
+
+    fig.suptitle("Comparación: frontera antigua (pared dura) vs. DTBC exacto (nuevo)", fontsize=13)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=160)
+    plt.close(fig)
+    print(f"Saved: {save_path}")
+
+
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser(description="Single-shot ring wavepacket simulation.")
+    parser.add_argument("--boundary", choices=["none", "dtbc"], default="none",
+                        help="'none' (default, unchanged): hard-wall truncated leads. "
+                             "'dtbc': exact discrete transparent boundary condition "
+                             "(Akramov et al. 2026, see dtbc.py).")
+    parser.add_argument("--compare", action="store_true",
+                        help="Instead of a normal run, run BOTH boundaries once and save "
+                             "a direct old-vs-new overlay comparison figure "
+                             "(boundary_comparison.png) -- ignores --boundary.")
+    args = parser.parse_args()
+    if args.compare:
+        compare_boundaries()
+    else:
+        main(boundary=args.boundary)

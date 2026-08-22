@@ -50,6 +50,7 @@ import scipy.sparse.linalg as spla
 import matplotlib.pyplot as plt
 
 import tools as t
+import dtbc as d
 
 
 # ---------------------------------------------------------------------------
@@ -766,6 +767,87 @@ def run_transparent_conductance(
                       if keep_time_series else None),
         P_left_cap_rate=P_left_series,
         P_right_cap_rate=P_right_series,
+    )
+
+
+def run_dtbc_conductance(
+    p: t.PhysicsParams,
+    fermi_energy_mev: float = 4.19,
+    total_time_ps: float = 70.0,
+    packet_center_fraction: float = 0.8,
+    packet_width_nm: float = 150.0,
+    spin_both: bool = True,
+    verbose: bool = True,
+) -> "CAPConductanceResult":
+    """Measure conductance using the EXACT discrete transparent boundary
+    condition (Akramov, Yusupov, Ehrhardt & Matrasulov, arXiv:2608.05338;
+    see dtbc.py for the full derivation and its corroboration against the
+    paper's own Fig. 2/3 demo, in dtbc_selftest.py).
+
+    Unlike run_cap_conductance (approximate absorbing ramp) and
+    run_transparent_conductance (exact only for the packet's central
+    Fourier component), this is exact for the WHOLE wavepacket -- no finite
+    absorbing region, no residual reflection from an imperfect ramp, no
+    "how long is long enough" ambiguity from an approximate boundary. The
+    remaining cost is O(total_time_ps^2) (a genuine non-Markovian memory
+    convolution, the same asymptotic cost the paper's own scheme has), so
+    keep total_time_ps just long enough to see T+R converge -- typically a
+    few tens of ps for this ring (see INFORME_2026-08-22_DTBC_QTBM_resonancias.md
+    section 1.5/3.3 for measured convergence times and quasi-bound-state
+    lifetimes for this system).
+
+    T and R are obtained by integrating the exact outward probability
+    current at each boundary (dtbc.transmission_reflection_from_history),
+    not by absorption in a finite region -- so T+R should equal
+    |chi|^2-normalized unity (approximately 1, up to the rectangle-rule
+    current integration's O(dt) error) once P_total_remaining ~ 0, i.e.
+    once the packet has actually finished exiting.
+    """
+    wall_start = time.perf_counter()
+    layout     = t.build_single_ring_layout(p)
+    k          = compute_wave_number(p, fermi_energy_mev)
+    time_steps = t.time_steps_for_duration(p, total_time_ps)
+
+    if verbose:
+        v = t.lead_group_velocity(p, k)
+        transit = (p.L_leads + p.L_ring) / v
+        print(f"  DTBC run: alpha={p.alpha:.1f} meV*nm | transit~{transit:.1f} ps | "
+              f"total={total_time_ps:.1f} ps | time_steps={time_steps}")
+
+    spin_arg = "both" if spin_both else "up"
+    psi = build_initial_wavefunction(
+        p, layout, k, packet_center_fraction, packet_width_nm, spin=spin_arg)
+    N0  = _weighted_total_probability(psi, layout)
+    _spin_scale = 2.0 if spin_both else 1.0
+
+    dtbc_result = d.run_dtbc_propagation(p, psi, time_steps, keep_history=False)
+    tr = d.transmission_reflection_from_history(p, dtbc_result)
+
+    T_raw = tr["T"] / N0 if N0 > 0 else 0.0
+    R_raw = tr["R"] / N0 if N0 > 0 else 0.0
+    T = min(_spin_scale * T_raw, 2.0)
+    R = min(_spin_scale * R_raw, 2.0)
+
+    wall_seconds = time.perf_counter() - wall_start
+    if verbose:
+        P_remaining = float(dtbc_result["P_total_history"][-1]) / N0 if N0 > 0 else 0.0
+        print(f"    -> T={T:.6f}  R={R:.6f}  T+R={T+R:.4f}  "
+              f"P_remaining/N0={P_remaining:.4f}  (spin={'both' if spin_both else 'up'})  "
+              f"[{wall_seconds:.1f} s]")
+
+    return CAPConductanceResult(
+        params=p,
+        fermi_energy_mev=fermi_energy_mev,
+        T=T,
+        R=R,
+        T_plus_R=T + R,
+        G_over_G0=T,
+        G_siemens=T * G0_SIEMENS,
+        total_time_ps=total_time_ps,
+        wall_seconds=wall_seconds,
+        time_axis_ps=None,
+        P_left_cap_rate=None,
+        P_right_cap_rate=None,
     )
 
 
